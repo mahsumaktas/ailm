@@ -55,7 +55,7 @@ snapper ───┘                        │
 > ⚠️ ailm pre-alpha aşamasındadır. Henüz paket yöneticisiyle kurulum desteklenmiyor.
 
 ```bash
-git clone https://github.com/yourusername/ailm
+git clone https://github.com/mahsumaktas/ailm
 cd ailm
 pip install -e ".[dev]"
 ollama pull qwen3.5:9b

@@ -32,7 +32,7 @@ The best way to contribute right now is through feedback and discussion.
 ## Development Setup
 
 ```bash
-git clone https://github.com/yourusername/ailm
+git clone https://github.com/mahsumaktas/ailm
 cd ailm
 python -m venv .venv
 source .venv/bin/activate

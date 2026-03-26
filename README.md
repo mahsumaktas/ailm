@@ -101,7 +101,7 @@ what actually matters to you — in plain language.
 
 ```bash
 # Requirements: Python 3.11+, Ollama, KDE Plasma 6 (Wayland)
-git clone https://github.com/yourusername/ailm
+git clone https://github.com/mahsumaktas/ailm
 cd ailm
 pip install -e ".[dev]"
 
