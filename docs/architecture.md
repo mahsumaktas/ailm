@@ -155,3 +155,49 @@ SAFE_ACTIONS = {
 
 Destructive actions always require explicit user confirmation,
 regardless of autonomy level setting.
+
+## Investigation Pipeline
+
+Every system event triggers a fixed-step investigation plan.
+Each step shows visible status in the feed (pending / ok / failed / skipped).
+
+See [investigation-pipeline.md](investigation-pipeline.md) for full details.
+
+Example: Service crash event:
+1. journald history (last 1 hour)
+2. Service dependency analysis
+3. Disk/RAM anomaly in the same period
+4. Did the last update affect this service
+5. Arch BBS known issue scan (v0.3+)
+
+## Evidence Format
+
+All LLM outputs must tag every finding with a mandatory evidence label:
+
+```
+[DATA] → [SOURCE: tool name, timestamp]
+```
+
+No line without a source. The distinction between measurement and
+interpretation is always visible.
+
+Example:
+```
+[disk 82%] → [Source: psutil, 14:23:01]
+[journal 2.3GB] → [Source: du /var/log/journal, 14:23:02]
+[vacuum suggestion] → [Source: LLM analysis]
+```
+
+This is enforced in the LLM output format spec and validated
+post-generation before display.
+
+## ACH Matrix (v0.4)
+
+For complex events, Analysis of Competing Hypotheses (ACH) is used.
+Multiple explanatory hypotheses are generated, each evaluated against
+the collected evidence. The hypothesis with the fewest inconsistencies
+is surfaced to the user.
+
+Inspiration: ACH technique from OSINT research methodology.
+
+Implementation planned for v0.4 — see [ROADMAP.md](../ROADMAP.md).

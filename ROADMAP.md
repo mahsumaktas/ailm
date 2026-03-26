@@ -30,6 +30,7 @@ Total interaction: 30 seconds/day.
 | Reboot notification | cachyos-reboot-required hook listener |
 | One-click actions | Whitelisted commands: restart, vacuum, reboot |
 | Graceful degradation | Ollama down → events queue, core functions continue |
+| Evidence format | Every LLM output tagged with [DATA] → [SOURCE] labels |
 | Distro abstraction | PackageManager / SnapshotBackend / InitSystem Protocol interfaces |
 
 ### Log Pipeline
@@ -61,6 +62,7 @@ Minimal but safe chat interface.
 | TOML hook config | Users define their own hooks |
 | rebuild-detector | Soname bump → "rebuild these packages" notification |
 | Notification grouping | Don't repeat the same alert |
+| Investigation pipeline | Fixed analysis steps per event type, each step visible in feed |
 
 ### Security: Prompt Injection Protection
 
@@ -129,6 +131,7 @@ and stops showing you things you don't care about.
 | Embedding anomaly | nomic-embed-text + cosine similarity baseline |
 | User preference learning | Learn from "ignore" actions |
 | Skill cache | Remember past solutions to recurring problems |
+| ACH matrix | Competing hypothesis evaluation for complex events |
 
 ### LLM Routing Logic
 
