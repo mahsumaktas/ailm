@@ -1,0 +1,111 @@
+"""Event repository — CRUD operations on the events table."""
+
+import logging
+from datetime import datetime, timedelta, timezone
+
+from ailm.core.models import EventType, Severity, SystemEvent
+from ailm.db.connection import Database
+
+logger = logging.getLogger(__name__)
+
+# Columns to fetch (excluding embedding BLOB — only needed for v0.4 similarity search)
+_EVENT_COLS = "id, timestamp, type, severity, summary, raw_data, source, user_action"
+
+
+class EventRepository:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    async def insert_event(self, event: SystemEvent) -> int:
+        cursor = await self.db.conn.execute(
+            """INSERT INTO events (timestamp, type, severity, summary, raw_data, source, user_action)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event.timestamp.isoformat(),
+                event.type.value,
+                event.severity.value,
+                event.summary,
+                event.raw_data,
+                event.source,
+                event.user_action,
+            ),
+        )
+        await self.db.conn.commit()
+        event.id = cursor.lastrowid
+        return cursor.lastrowid
+
+    async def get_events_since(
+        self, since: datetime, event_type: EventType | None = None,
+        limit: int = 1000,
+    ) -> list[SystemEvent]:
+        if event_type is not None:
+            rows = await self.db.conn.execute_fetchall(
+                f"SELECT {_EVENT_COLS} FROM events WHERE timestamp >= ? AND type = ? ORDER BY timestamp LIMIT ?",
+                (since.isoformat(), event_type.value, limit),
+            )
+        else:
+            rows = await self.db.conn.execute_fetchall(
+                f"SELECT {_EVENT_COLS} FROM events WHERE timestamp >= ? ORDER BY timestamp LIMIT ?",
+                (since.isoformat(), limit),
+            )
+        return [e for r in rows if (e := self._row_to_event(r)) is not None]
+
+    async def get_recent_events(self, limit: int = 50) -> list[SystemEvent]:
+        rows = await self.db.conn.execute_fetchall(
+            f"SELECT {_EVENT_COLS} FROM events ORDER BY timestamp DESC LIMIT ?", (limit,)
+        )
+        return [e for r in rows if (e := self._row_to_event(r)) is not None]
+
+    async def update_user_action(self, event_id: int, action: str) -> None:
+        await self.db.conn.execute(
+            "UPDATE events SET user_action = ? WHERE id = ?", (action, event_id)
+        )
+        await self.db.conn.commit()
+
+    async def get_event_count_by_type(self, since: datetime) -> dict[str, int]:
+        rows = await self.db.conn.execute_fetchall(
+            "SELECT type, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY type",
+            (since.isoformat(),),
+        )
+        return {row["type"]: row["cnt"] for row in rows}
+
+    async def cleanup_old_events(self, retention_days: int,
+                                  critical_retention_days: int = 365) -> int:
+        """Delete old events. SERVICE_FAIL and user-applied events get longer retention."""
+        normal_cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        critical_cutoff = (datetime.now(timezone.utc) - timedelta(days=critical_retention_days)).isoformat()
+
+        # Delete normal events past retention
+        c1 = await self.db.conn.execute(
+            """DELETE FROM events
+               WHERE timestamp < ?
+                 AND type != ?
+                 AND (user_action IS NULL OR user_action != 'applied')""",
+            (normal_cutoff, EventType.SERVICE_FAIL.value),
+        )
+        # Delete critical events past extended retention (1yr default)
+        c2 = await self.db.conn.execute(
+            """DELETE FROM events
+               WHERE timestamp < ?
+                 AND (type = ? OR user_action = 'applied')""",
+            (critical_cutoff, EventType.SERVICE_FAIL.value),
+        )
+        await self.db.conn.commit()
+        return c1.rowcount + c2.rowcount
+
+    @staticmethod
+    def _row_to_event(row) -> SystemEvent | None:
+        try:
+            return SystemEvent(
+                id=row["id"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                type=EventType(row["type"]),
+                severity=Severity(row["severity"]),
+                summary=row["summary"],
+                raw_data=row["raw_data"] or "",
+                source=row["source"],
+                user_action=row["user_action"],
+            )
+        except (ValueError, KeyError):
+            logger.warning("Skipping corrupted event row id=%s", row["id"])
+            return None

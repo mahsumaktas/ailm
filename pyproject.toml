@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ailm"
+version = "0.1.0-dev"
+description = "AI-powered Linux system companion"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{name = "ailm contributors"}]
+keywords = ["linux", "system-monitor", "ai", "llm", "desktop"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "PySide6>=6.7",
+    "psutil>=5.9",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "watchdog>=4.0",
+    "pluggy>=1.4",
+    "APScheduler>=4.0.0a5",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-qt>=4.4",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+ailm = "ailm.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/mahsumaktas/ailm"
+Repository = "https://github.com/mahsumaktas/ailm"
+Issues = "https://github.com/mahsumaktas/ailm/issues"
+
+[tool.setuptools.packages.find]
+include = ["ailm*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
