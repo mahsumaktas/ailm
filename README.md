@@ -2,13 +2,15 @@
   <h1>ailm</h1>
   <p><strong>AI-powered Linux system companion that watches your machine and tells you what matters.</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/status-pre--alpha-orange" />
+    <img src="https://img.shields.io/badge/status-v0.1--dev-blue" />
     <img src="https://img.shields.io/badge/platform-Linux-blue" />
-    <img src="https://img.shields.io/badge/LLM-local%20%7C%20cloud-green" />
+    <img src="https://img.shields.io/badge/LLM-local--first-green" />
     <img src="https://img.shields.io/badge/license-MIT-lightgrey" />
+    <img src="https://img.shields.io/badge/tests-359%20passing-brightgreen" />
+    <img src="https://img.shields.io/badge/python-%3E%3D3.12-blue" />
   </p>
   <p>
-    <a href="README.tr.md">Türkçe</a> ·
+    <a href="README.tr.md">Turkce</a> ·
     <a href="ROADMAP.md">Roadmap</a> ·
     <a href="VISION.md">Vision</a> ·
     <a href="docs/architecture.md">Architecture</a>
@@ -19,8 +21,7 @@
 
 ## What is ailm?
 
-ailm is a system tray daemon for Linux that monitors your machine, learns your habits,
-and gives you a morning briefing — all powered by a local LLM running on your own hardware.
+ailm is a system tray daemon for Linux that monitors your machine, classifies system events with a local LLM, and gives you a morning briefing — all running on your own hardware.
 
 Instead of you watching your system, **ailm watches it for you.**
 
@@ -33,108 +34,181 @@ Instead of you watching your system, **ailm watches it for you.**
 │─────────────────────────────────│
 │  📋 Today's briefing            │
 │  09:00 ✓ Morning report: all OK │
-│  11:42 ⚠ CopyQ FD: 650/65K     │
+│  11:42 ⚠ VAAPI allocation fail  │
 │  14:20 ✓ 3 packages updated    │
-│  15:01 · .pacnew: pacman.conf   │
-│─────────────────────────────────│
-│  > Ask something...         [⏎] │
+│  15:01 · Service restart needed  │
 └─────────────────────────────────┘
 ```
 
 ## Why ailm?
 
 Rolling release distributions (Arch, CachyOS, EndeavourOS) are powerful but noisy.
-Every day brings updates, .pacnew files, service failures, disk pressure, kernel changes.
+Every day brings updates, service failures, disk pressure, kernel changes, log anomalies.
 Most users either ignore these signals or spend too much time chasing them.
 
-ailm sits in the middle: it reads the noise, understands the context, and surfaces only
-what actually matters to you — in plain language.
+ailm sits in the middle: it reads the noise, understands the context via LLM, and surfaces only what actually matters — in plain language.
 
 ## Core Philosophy
 
 - **Proactive over reactive.** ailm tells you before you ask.
-- **Local by default.** Your logs never leave your machine unless you choose cloud LLM.
+- **Local by default.** Your logs never leave your machine.
 - **Listener not doer.** ailm reads existing tools (snapper, pacman, systemd) — it doesn't replace them.
 - **Learns over time.** The more you use it, the less noise you see.
 - **Graceful degradation.** If Ollama is down, ailm still works — events queue, analysis waits.
 
-## Key Features (Planned)
+## v0.1 Features (Implemented)
 
 | Feature | Status |
 |---|---|
-| System tray icon (green/yellow/red) | 🔨 Building |
-| Activity feed with LLM summaries | 🔨 Building |
-| Morning briefing (daily digest) | 🔨 Building |
-| journald log monitoring + anomaly detection | 🔨 Building |
-| Package update tracking (pacman/alpm) | 🔨 Building |
-| Snapshot event tracking (snapper/snap-pac) | 🔨 Building |
-| Disk pressure alerts with forecast | 🔨 Building |
-| Failed service detection | 🔨 Building |
-| .pacnew detection + merge suggestions | 📋 Planned |
-| File change monitoring (/etc) | 📋 Planned |
-| Scheduled tasks (TOML config) | 📋 Planned |
-| Hybrid LLM routing (local → cloud fallback) | 📋 Planned |
-| User preference learning | 📋 Planned |
-| MCP server (Claude Code integration) | 📋 Planned |
-| Multi-distro support (Fedora, openSUSE) | 📋 Planned |
+| System tray icon (green/amber/red health status) | ✅ Done |
+| Popup feed with LLM-classified event cards | ✅ Done |
+| Morning briefing (daily digest at 06:00) | ✅ Done |
+| journald log monitoring + regex pre-filter + LLM classification | ✅ Done |
+| Package update tracking (pacman ALPM log parser) | ✅ Done |
+| Snapshot event tracking (snapper/snap-pac watcher) | ✅ Done |
+| Disk usage alerts with severity dedup | ✅ Done |
+| Failed systemd service detection | ✅ Done |
+| Reboot detection (kernel mismatch check) | ✅ Done |
+| Safe actions whitelist (restart service, vacuum journal) | ✅ Done |
+| pluggy hook system (event/status/action hooks) | ✅ Done |
+| Evidence format validation for LLM outputs | ✅ Done |
+| Graceful degradation (LLM queue + health check) | ✅ Done |
+| SystemStatus tracking (healthy/degraded/critical) | ✅ Done |
+| Structured logging with rotation | ✅ Done |
+| systemd user service for auto-start | ✅ Done |
+
+### Planned (v0.2+)
+
+| Feature | Version |
+|---|---|
+| .pacnew detection + LLM merge suggestions | v0.2 |
+| Chat interface with intent preview | v0.2 |
+| TOML hook configuration | v0.2 |
+| Hybrid LLM routing (local → cloud fallback) | v0.4 |
+| User preference learning | v0.4 |
+| Embedding-based anomaly detection (sqlite-vec) | v0.4 |
+| MCP server (Claude Code integration) | v0.5 |
+| Multi-distro support (Fedora, openSUSE) | v0.5 |
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────┐
+│                    PySide6 UI                     │
+│         Tray Icon ← StatusTracker → Popup Feed    │
+└─────────────────────┬────────────────────────────┘
+                      │ Qt Signals
+┌─────────────────────┴────────────────────────────┐
+│               AsyncioBridge (QThread)             │
+└─────────────────────┬────────────────────────────┘
+                      │ asyncio
+┌─────────────────────┴────────────────────────────┐
+│                   EventBus                        │
+│     publish ← Sources    subscribe → DB, Hooks    │
+├──────────────────────────────────────────────────┤
+│  Sources          │  Consumers       │  Services  │
+│  · DiskMonitor    │  · DB persist    │  · Ollama  │
+│  · ServiceMonitor │  · StatusTracker │  · Sched.  │
+│  · PacmanSource   │  · HookManager  │  · Actions  │
+│  · SnapshotSource │  · LLM classify │            │
+│  · RebootSource   │                  │            │
+│  · JournaldSource │                  │            │
+├──────────────────────────────────────────────────┤
+│                 SQLite WAL + Ollama               │
+└──────────────────────────────────────────────────┘
+```
 
 ## Tech Stack
 
 | Layer | Choice | Reason |
 |---|---|---|
-| UI | PySide6 (Qt6) | Best Wayland/KDE Plasma 6 support, 20-40MB RAM |
-| System tray | SNI via DBus | Native KDE/GNOME compatibility |
-| LLM (local) | Ollama (qwen3.5:9b default) | Fast, private, offline |
-| LLM (cloud) | Claude API (optional) | Deep analysis on complex events |
-| Event bus | asyncio.Queue + pub/sub | Zero dependency, reliable |
+| UI | PySide6 (Qt6) | Best Wayland/KDE Plasma 6 support |
+| LLM | Ollama (local) | Private, offline, configurable model |
+| Event bus | asyncio pub/sub | Zero dependency, backpressure |
 | Database | SQLite WAL | Embedded, fast, proven |
-| Vector search | sqlite-vec | Semantic memory, zero infra |
-| Embeddings | nomic-embed-text (Ollama) | 274MB, local, accurate |
-| File watching | watchdog (inotify) | Pythonic, cross-platform |
-| Scheduling | APScheduler v4 | asyncio-native |
-| Log monitoring | python-systemd | Direct sd_journal_follow |
-| Hook system | pluggy | pytest's hook engine, extensible |
+| File watching | watchdog (inotify) | Event-driven, debounced |
+| Log monitoring | python-systemd | Direct journal access |
+| Scheduling | asyncio-native | Cron + interval jobs |
+| Hook system | pluggy | Extensible plugin architecture |
 
-## Installation
-
-> ⚠️ ailm is in pre-alpha. Not yet available via package managers.
+## Quick Start
 
 ```bash
-# Requirements: Python 3.11+, Ollama, KDE Plasma 6 (Wayland)
+# Requirements: Python 3.12+, Ollama, Linux (Arch-based recommended)
+
+# Clone and install
 git clone https://github.com/mahsumaktas/ailm
 cd ailm
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Pull default LLM
-ollama pull qwen3.5:9b
-ollama pull nomic-embed-text
+# Install system dependency (Arch/CachyOS)
+sudo pacman -S python-systemd
 
-# Run
-ailm
+# Pull an LLM model
+ollama pull qwen3.5:9b
+
+# Configure (optional — defaults work out of the box)
+mkdir -p ~/.config/ailm
+cat > ~/.config/ailm/config.toml << 'EOF'
+[llm]
+model = "qwen3.5:9b"
+EOF
+
+# Run headless
+ailm --no-ui
+
+# Or install as systemd user service
+cp contrib/ailm.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ailm
 ```
+
+## Resource Usage
+
+ailm is designed to be invisible:
+
+| Metric | Value |
+|---|---|
+| CPU (idle) | ~0% (event-driven, not polling) |
+| RAM | ~35-40 MB |
+| Disk checks | Every 60s (configurable) |
+| LLM calls | Only for classification + daily briefing |
+| VRAM | 0 (model loaded by Ollama on demand) |
 
 ## Supported Distributions
 
 | Distro | Status | Notes |
 |---|---|---|
 | CachyOS | ✅ Primary target | snap-pac, snapper, rebuild-detector |
-| Arch Linux | ✅ Planned v0.1 | Same package ecosystem |
-| EndeavourOS | ✅ Planned v0.1 | Same package ecosystem |
+| Arch Linux | ✅ Supported | Same package ecosystem |
+| EndeavourOS | ✅ Supported | Same package ecosystem |
 | Fedora | 📋 Planned v0.5 | dnf backend |
 | openSUSE | 📋 Planned v0.5 | zypper backend |
+
+## Development
+
+```bash
+# Run tests (359 passing)
+python -m pytest tests/ -q
+
+# Type checking
+mypy ailm/
+
+# Linting
+ruff check ailm/
+```
 
 ## Research Context
 
 ailm draws from several research threads:
 
-- **OS-Copilot** (ICLR 2024) — generalist OS agents with self-improvement
-- **AIOS** (COLM 2025) — LLM agent operating system with memory management
-- **LogLLM** (arXiv 2024) — LLM-based log anomaly detection
-- **IFSHM** (arXiv 2025) — intelligent fault self-healing with LLM+DRL
+- **OS-Copilot** (ICLR 2024) — generalist OS agents
+- **AIOS** (COLM 2025) — LLM agent OS with memory management
+- **LogLLM** (2024) — LLM-based log anomaly detection
 - **ReAct** (ICLR 2023) — reasoning and acting in language models
-- **MemEvolve/MemRL** (2025-2026) — evolving agent memory systems
 
-See [docs/research-context.md](docs/research-context.md) for a full review.
+See [docs/research-context.md](docs/research-context.md) for details.
 
 ## Contributing
 
