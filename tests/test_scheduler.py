@@ -428,7 +428,7 @@ class TestSchedulerEngine:
         await engine.start()
 
         await engine.add_cron_job(_dummy_cron_job, "0 6 * * *", "morning-briefing")
-        assert len(engine._schedule_ids) == 1
+        assert len(engine._jobs) == 1
 
         await engine.stop()
 
@@ -437,7 +437,7 @@ class TestSchedulerEngine:
         await engine.start()
 
         await engine.add_interval_job(_dummy_interval_job, 300, "health-check")
-        assert len(engine._schedule_ids) == 1
+        assert len(engine._jobs) == 1
 
         await engine.stop()
 

@@ -1,108 +1,124 @@
-"""APScheduler v4 wrapper with asyncio fallback.
+"""Simple asyncio-based scheduler — replaces APScheduler v4 alpha.
 
-Uses APScheduler's AsyncScheduler for cron/interval scheduling.
-The wrapper isolates APScheduler's alpha API so swapping backends
-requires changes in this file only.
+APScheduler v4 alpha requires module-level callables (no closures).
+This engine uses plain asyncio tasks with cron matching, which supports
+closures and is simpler to maintain.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from contextlib import suppress
+from datetime import datetime, timezone
 from typing import Any
-
-from apscheduler import AsyncScheduler
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
 type AsyncJobFunc = Callable[..., Coroutine[Any, Any, None]]
 
 
-def _parse_cron(cron_expr: str) -> CronTrigger:
-    """Parse a 5-field cron expression into an APScheduler CronTrigger.
-
-    Format: minute hour day month day_of_week
-    """
+def _parse_cron(cron_expr: str) -> dict[str, str]:
+    """Parse 5-field cron into a dict. Format: minute hour day month day_of_week."""
     parts = cron_expr.strip().split()
     if len(parts) != 5:
-        msg = f"Expected 5-field cron expression, got {len(parts)}: {cron_expr!r}"
-        raise ValueError(msg)
+        raise ValueError(f"Expected 5-field cron, got {len(parts)}: {cron_expr!r}")
+    return dict(zip(("minute", "hour", "day", "month", "day_of_week"), parts))
 
-    minute, hour, day, month, day_of_week = parts
-    return CronTrigger(
-        minute=minute,
-        hour=hour,
-        day=day,
-        month=month,
-        day_of_week=day_of_week,
-    )
+
+def _cron_matches(fields: dict[str, str], dt: datetime) -> bool:
+    """Check if datetime matches cron fields."""
+    checks = {
+        "minute": dt.minute,
+        "hour": dt.hour,
+        "day": dt.day,
+        "month": dt.month,
+        "day_of_week": dt.weekday(),  # 0=Monday
+    }
+    for key, value in checks.items():
+        pattern = fields[key]
+        if pattern == "*":
+            continue
+        # Simple: exact match or comma-separated values
+        allowed = {int(v) for v in pattern.split(",")}
+        if value not in allowed:
+            return False
+    return True
+
+
+class _Job:
+    def __init__(self, job_id: str, func: AsyncJobFunc,
+                 cron: dict[str, str] | None = None, interval: int | None = None):
+        self.job_id = job_id
+        self.func = func
+        self.cron = cron
+        self.interval = interval
 
 
 class SchedulerEngine:
-    """Thin wrapper around APScheduler v4 AsyncScheduler.
-
-    Provides a stable interface so the rest of ailm doesn't depend
-    on APScheduler's alpha API directly.
-
-    APScheduler v4 alpha requires context manager initialization
-    before calling start_in_background/add_schedule. This wrapper
-    handles that lifecycle transparently.
-    """
+    """Lightweight asyncio scheduler supporting cron and interval jobs."""
 
     def __init__(self) -> None:
-        self._scheduler: AsyncScheduler | None = None
+        self._jobs: list[_Job] = []
+        self._tasks: list[asyncio.Task] = []
         self._running = False
-        self._schedule_ids: list[str] = []
 
     @property
     def running(self) -> bool:
         return self._running
 
     async def start(self) -> None:
-        """Initialize services and start the scheduler in background mode."""
         if self._running:
             return
-        self._scheduler = AsyncScheduler()
-        # APScheduler v4 requires __aenter__ to initialize internal services
-        await self._scheduler.__aenter__()
-        await self._scheduler.start_in_background()
         self._running = True
         logger.info("Scheduler started")
 
     async def stop(self) -> None:
-        """Stop the scheduler and clean up resources."""
         if not self._running:
             return
         self._running = False
-        self._schedule_ids.clear()
-        if self._scheduler is not None:
-            await self._scheduler.__aexit__(None, None, None)
-            self._scheduler = None
+        for task in self._tasks:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._tasks.clear()
+        self._jobs.clear()
         logger.info("Scheduler stopped")
 
-    def _ensure_started(self) -> AsyncScheduler:
-        if self._scheduler is None or not self._running:
-            raise RuntimeError("Scheduler not started — call start() first")
-        return self._scheduler
-
     async def add_cron_job(self, func: AsyncJobFunc, cron_expr: str, job_id: str) -> None:
-        """Schedule a coroutine function using a 5-field cron expression.
-
-        Must be called after start().
-        """
-        scheduler = self._ensure_started()
-        trigger = _parse_cron(cron_expr)
-        schedule_id = await scheduler.add_schedule(func, trigger, id=job_id)
-        self._schedule_ids.append(schedule_id)
+        fields = _parse_cron(cron_expr)
+        job = _Job(job_id=job_id, func=func, cron=fields)
+        self._jobs.append(job)
+        task = asyncio.create_task(self._run_cron(job))
+        self._tasks.append(task)
         logger.info("Cron job added: %s (%s)", job_id, cron_expr)
 
     async def add_interval_job(self, func: AsyncJobFunc, seconds: int, job_id: str) -> None:
-        """Schedule a coroutine function at a fixed interval.
-
-        Must be called after start().
-        """
-        scheduler = self._ensure_started()
-        trigger = IntervalTrigger(seconds=seconds)
-        schedule_id = await scheduler.add_schedule(func, trigger, id=job_id)
-        self._schedule_ids.append(schedule_id)
+        job = _Job(job_id=job_id, func=func, interval=seconds)
+        self._jobs.append(job)
+        task = asyncio.create_task(self._run_interval(job))
+        self._tasks.append(task)
         logger.info("Interval job added: %s (every %ds)", job_id, seconds)
+
+    async def _run_cron(self, job: _Job) -> None:
+        """Check cron match every 60s, fire when matched."""
+        last_fired_minute = -1
+        while True:
+            await asyncio.sleep(30)
+            now = datetime.now(timezone.utc)
+            if now.minute == last_fired_minute:
+                continue
+            if job.cron and _cron_matches(job.cron, now):
+                last_fired_minute = now.minute
+                try:
+                    await job.func()
+                except Exception:
+                    logger.exception("Cron job %s failed", job.job_id)
+
+    async def _run_interval(self, job: _Job) -> None:
+        """Run job at fixed interval."""
+        while True:
+            await asyncio.sleep(job.interval or 60)
+            try:
+                await job.func()
+            except Exception:
+                logger.exception("Interval job %s failed", job.job_id)
