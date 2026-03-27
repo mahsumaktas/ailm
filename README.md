@@ -90,6 +90,8 @@ ailm sits in the middle: it reads the noise, understands the context via LLM, an
 | Embedding-based anomaly detection (sqlite-vec) | v0.4 |
 | MCP server (Claude Code integration) | v0.5 |
 | Multi-distro support (Fedora, openSUSE) | v0.5 |
+| Telegram/iMessage/SMS briefings + remote query | v0.8 |
+| MCP tunnel for remote access | v0.8 |
 
 ## Architecture
 

@@ -168,10 +168,11 @@ def route_to_llm(task: Task) -> LLMTier:
 | Component | Detail |
 |---|---|
 | Plugin system | pluggy — 3rd party hooks, tasks, analyzers |
-| MCP server | Claude Code can use ailm as a tool |
+| MCP server | Claude Code can query ailm events, status, actions |
 | Multi-distro | Fedora (dnf), openSUSE (zypper) backends |
 | KDE Connect | Push notifications to phone |
 | i18n | TR / EN UI |
+| Chat interface | Ask ailm about system state via popup or MCP |
 | AUR package | `ailm` and `ailm-git` |
 
 ### MCP Server Concept
@@ -230,6 +231,73 @@ ailm: "I noticed your GPU driver crashed again. Looking at the last
 ```
 
 This is the feature that does not exist in any current tool.
+
+---
+
+## v0.8 — "Messaging & Remote Access" (Target: 2026 Q4)
+
+**Core value delivered:** Ask ailm anything from anywhere — iMessage,
+Telegram, SMS. Get briefings pushed to your phone. Query your system
+remotely via chat.
+
+### Components
+
+| Component | Detail |
+|---|---|
+| Telegram bot | Bidirectional — briefings out, queries in |
+| iMessage bridge | Via Mac mini relay (Tailscale mesh) |
+| SMS gateway | Optional, via Twilio or similar |
+| MCP tunnel | WebSocket tunnel for remote MCP access (inspired by Poke Gate) |
+| Push briefings | Morning briefing auto-sent to configured channels |
+| Remote query | "What's my disk usage?" → ailm responds via chat |
+| Security | End-to-end auth, rate limiting, command whitelist |
+
+### Architecture
+
+```
+Phone (iMessage/Telegram/SMS)
+    │
+    ▼
+Message Bridge (Mac mini / cloud relay)
+    │
+    ▼ WebSocket tunnel
+ailm MCP Server (local machine)
+    │
+    ▼
+EventBus / DB / LLM → response
+    │
+    ▼
+Message Bridge → Phone
+```
+
+### Interaction Examples
+
+```
+You (Telegram): "ailm durum ne?"
+ailm: "Sistem saglıklı. Disk %45, 3 paket güncellendi,
+       servis hatası yok. Son anomali: 2 saat önce
+       Chrome VAAPI hatası (bilinen sorun)."
+
+You (iMessage): "sabah özeti"
+ailm: "📋 Bugünün özeti:
+       • 12 paket güncellendi (mesa, linux-cachyos dahil)
+       • Reboot gerekli — kernel değişti
+       • Disk: %62, trend stabil
+       • 3 log anomalisi (hepsi Chrome kaynaklı)"
+
+You (SMS): "restart bluetooth"
+ailm: "⚠️ bluetooth.service yeniden başlatılsın mı? [EVET/HAYIR]"
+You: "EVET"
+ailm: "✅ bluetooth.service yeniden başlatıldı."
+```
+
+### Privacy & Security
+
+- Messages are relayed, not stored in cloud
+- Tailscale mesh for iMessage bridge (no public endpoints)
+- Telegram bot token stays local
+- Remote commands go through same ActionRegistry whitelist
+- Rate limiting: max 10 queries/minute per channel
 
 ---
 
