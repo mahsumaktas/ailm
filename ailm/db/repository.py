@@ -62,6 +62,12 @@ class EventRepository:
         )
         await self.db.conn.commit()
 
+    async def update_summary(self, event_id: int, summary: str) -> None:
+        await self.db.conn.execute(
+            "UPDATE events SET summary = ? WHERE id = ?", (summary, event_id)
+        )
+        await self.db.conn.commit()
+
     async def get_event_count_by_type(self, since: datetime) -> dict[str, int]:
         rows = await self.db.conn.execute_fetchall(
             "SELECT type, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY type",

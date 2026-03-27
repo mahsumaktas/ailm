@@ -226,9 +226,8 @@ class Application:
             result = await self.llm.classify_log(event.raw_data)
             if result is not None:
                 event.summary = result.get("summary", event.raw_data[:120])
-                # Update in DB if already persisted
                 if event.id is not None and self.repo is not None:
-                    await self.repo.update_user_action(event.id, None)  # triggers re-read
+                    await self.repo.update_summary(event.id, event.summary)
                 return
 
         # LLM unavailable — queue for later with callback to update DB
@@ -246,7 +245,7 @@ class Application:
                 except (json.JSONDecodeError, AttributeError):
                     summary = result[:120]
                 if event_id is not None and self.repo is not None:
-                    event.summary = summary
+                    await self.repo.update_summary(event_id, summary)
                     logger.debug("Backfilled classification for event %d", event_id)
 
             self.llm_queue.enqueue(LLMTask(

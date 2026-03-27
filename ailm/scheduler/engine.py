@@ -104,7 +104,7 @@ class SchedulerEngine:
         last_fired_minute = -1
         while True:
             await asyncio.sleep(30)
-            now = datetime.now(timezone.utc)
+            now = datetime.now().astimezone()  # local time — cron is user-facing
             if now.minute == last_fired_minute:
                 continue
             if job.cron and _cron_matches(job.cron, now):

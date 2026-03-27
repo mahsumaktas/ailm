@@ -155,11 +155,7 @@ async def generate_morning_briefing(
         summary=briefing_text,
     )
 
-    try:
-        await repo.insert_event(briefing_event)
-    except Exception:
-        logger.exception("Failed to store briefing event")
-
+    # Publish to bus — DB persistence handled by bus subscriber (_persist_event)
     try:
         await bus.publish(briefing_event)
     except Exception:

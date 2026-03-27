@@ -361,25 +361,24 @@ class TestGenerateMorningBriefing:
         assert len(captured_summary) == 1
         assert len(captured_summary[0]) <= MAX_SUMMARY_CHARS
 
-    async def test_briefing_event_stored_in_db(self):
-        """The briefing event is persisted via insert_event."""
+    async def test_briefing_event_published_to_bus(self):
+        """The briefing event is published to bus (DB persist via bus subscriber)."""
         db = _make_mock_db()
         llm = _make_mock_llm(available=True, briefing_text="All good.")
         bus = EventBus()
+        published: list = []
+        bus.subscribe(None, published.append)
         await bus.start()
 
         with patch.object(EventRepository, "get_events_since", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = []
-            with patch.object(EventRepository, "insert_event", new_callable=AsyncMock) as mock_insert:
-                mock_insert.return_value = 1
-                await generate_morning_briefing(db, llm, bus)
+            await generate_morning_briefing(db, llm, bus)
 
         await bus.stop()
 
-        mock_insert.assert_awaited_once()
-        stored_event = mock_insert.call_args[0][0]
-        assert stored_event.type == EventType.BRIEFING
-        assert stored_event.summary == "All good."
+        assert len(published) == 1
+        assert published[0].type == EventType.BRIEFING
+        assert published[0].summary == "All good."
 
     async def test_db_query_failure_handled_gracefully(self):
         """If DB query fails, briefing doesn't crash."""
