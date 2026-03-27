@@ -76,6 +76,7 @@ ailm sits in the middle: it reads the noise, understands the context via LLM, an
 | SystemStatus tracking (healthy/degraded/critical) | ✅ Done |
 | Structured logging with rotation | ✅ Done |
 | systemd user service for auto-start | ✅ Done |
+| Control panel tray (start/stop, model switch) | ✅ Done |
 
 ### Planned (v0.2+)
 
@@ -162,6 +163,9 @@ ailm --no-ui
 cp contrib/ailm.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ailm
+
+# Optional: control panel tray (start/stop, model switch)
+python contrib/ailm-control.py &
 ```
 
 ## Resource Usage

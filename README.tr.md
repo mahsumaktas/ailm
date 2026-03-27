@@ -44,6 +44,7 @@ ailm ikisi arasinda durur: gurultuyu okur, baglami LLM ile anlar ve yalnizca ger
 - pluggy hook sistemi
 - LLM cikti dogrulama (evidence format)
 - Zarif bozulma (LLM kuyrugu + saglik kontrolu)
+- Kontrol paneli tray (baslat/durdur, model degistir)
 
 ## Mimari
 
