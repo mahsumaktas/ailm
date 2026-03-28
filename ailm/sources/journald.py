@@ -31,7 +31,8 @@ except ImportError:
 PREFILTER_RE = re.compile(
     r"(?i)\b(error|critical|fail|denied|oom|segfault|killed|panic|"
     r"coredump|timeout|refused|unreachable|dropped|degraded|"
-    r"emergency|alert|fatal|abort|corrupt)"
+    r"emergency|alert|fatal|abort|corrupt|"
+    r"invalid user|authentication failure|ban |unban )"
 )
 
 BATCH_SECONDS = 5

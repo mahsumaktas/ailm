@@ -19,6 +19,7 @@ from ailm.llm import LLMTask, LLMTaskQueue, OllamaClient
 from ailm.scheduler import SchedulerEngine, generate_morning_briefing
 from ailm.sources.base import Source
 from ailm.sources.disk import DiskMonitor
+from ailm.sources.docker import DockerSource
 from ailm.sources.journald import JournaldSource
 from ailm.sources.pacman import PacmanSource
 from ailm.sources.pacnew import PacnewSource
@@ -196,6 +197,7 @@ class Application:
             self.sources.append(SnapshotSource(cfg.snapshot_path))
 
         self.sources.append(PacnewSource())
+        self.sources.append(DockerSource())
 
         if cfg.journald_enabled:
             dedup_cfg = self.config.dedup
@@ -229,26 +231,77 @@ class Application:
 
         await self.scheduler.add_cron_job(cleanup_job, "0 3 * * *", job_id="db_cleanup")
 
+        # Metric thresholds: metric_name -> slope_threshold (units/hour)
+        _TREND_THRESHOLDS = {
+            "disk_usage_pct": self.config.sources.disk_slope_threshold,  # %/hr
+            "cpu_pct": 20.0,          # sustained CPU climb >20%/hr
+            "ram_pct": 10.0,          # memory leak >10%/hr
+            "swap_pct": 5.0,          # swap growth >5%/hr
+            "net_recv_mbps": 50.0,    # unusual incoming traffic
+            "net_sent_mbps": 50.0,    # unusual outgoing traffic
+        }
+
+        # Track previous network counters for delta
+        _prev_net = {"recv": 0, "sent": 0, "time": 0.0}
+
         # Periodic health + status prune + queue drain + trend sampling (every 30s)
         async def health_job() -> None:
             self.status_tracker.prune()
 
-            # Fast-poll disk trend (30s intervals → full window in 10min with window_size=20)
+            # System metrics → TrendTracker (30s intervals)
             try:
+                import time as _time
                 import psutil
-                pct = psutil.disk_usage("/").percent
-                alert = self.trend_tracker.update(
-                    "disk_usage_pct", pct,
-                    slope_threshold=self.config.sources.disk_slope_threshold,
-                )
-                if alert is not None:
-                    await self.bus.publish(SystemEvent(
-                        type=EventType.TREND_ALERT,
-                        severity=Severity.WARNING,
-                        raw_data=f"metric={alert.metric} slope={alert.slope:.3f} ema={alert.ema:.1f}",
-                        source="trend",
-                        summary=alert.summary,
-                    ))
+
+                now_mono = _time.monotonic()
+
+                # Disk
+                disk_pct = psutil.disk_usage("/").percent
+
+                # CPU (non-blocking, 0-interval returns since last call)
+                cpu_pct = psutil.cpu_percent(interval=0)
+
+                # Memory
+                mem = psutil.virtual_memory()
+                ram_pct = mem.percent
+                swap = psutil.swap_memory()
+                swap_pct = swap.percent
+
+                # Network (delta since last call → Mbps)
+                net = psutil.net_io_counters()
+                dt = now_mono - _prev_net["time"] if _prev_net["time"] > 0 else 30.0
+                if dt > 0 and _prev_net["time"] > 0:
+                    recv_mbps = (net.bytes_recv - _prev_net["recv"]) * 8 / dt / 1_000_000
+                    sent_mbps = (net.bytes_sent - _prev_net["sent"]) * 8 / dt / 1_000_000
+                else:
+                    recv_mbps = 0.0
+                    sent_mbps = 0.0
+                _prev_net["recv"] = net.bytes_recv
+                _prev_net["sent"] = net.bytes_sent
+                _prev_net["time"] = now_mono
+
+                # Feed all metrics to trend tracker
+                metrics = {
+                    "disk_usage_pct": disk_pct,
+                    "cpu_pct": cpu_pct,
+                    "ram_pct": ram_pct,
+                    "swap_pct": swap_pct,
+                    "net_recv_mbps": recv_mbps,
+                    "net_sent_mbps": sent_mbps,
+                }
+                for name, value in metrics.items():
+                    threshold = _TREND_THRESHOLDS.get(name)
+                    if threshold is None:
+                        continue
+                    alert = self.trend_tracker.update(name, value, slope_threshold=threshold)
+                    if alert is not None:
+                        await self.bus.publish(SystemEvent(
+                            type=EventType.TREND_ALERT,
+                            severity=Severity.WARNING,
+                            raw_data=f"metric={alert.metric} slope={alert.slope:.3f} ema={alert.ema:.1f} current={alert.current_value:.1f}",
+                            source="trend",
+                            summary=alert.summary,
+                        ))
             except Exception:
                 pass  # psutil failure should not break health check
 

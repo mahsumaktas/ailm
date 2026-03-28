@@ -93,6 +93,9 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 | Summary dedup normalization (summary_hash for grouping) | ✅ |
 | SIGHUP config hot-reload (LLM model, intervals, dedup params) | ✅ |
 | .pacnew detection (hourly /etc scan, diff preview, merge warning) | ✅ |
+| System metrics trend (CPU, RAM, swap, network via psutil) | ✅ |
+| Docker container lifecycle monitoring (start/stop/die/oom) | ✅ |
+| SSH brute-force detection (journald prefilter) | ✅ |
 
 ### Planned
 
@@ -127,8 +130,9 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 │  · PacmanSource   │  · HookManager  │  · Actions  │
 │  · SnapshotSource │  · LLM classify │  · Dedup   │
 │  · RebootSource   │  · RingBufferLog│  · Trend   │
-│  · JournaldSource │  · CrashDetect  │            │
-│  · PacnewSource   │                  │            │
+│  · JournaldSource │  · CrashDetect  │  · Noise   │
+│  · PacnewSource   │  · ActionDetect │            │
+│  · DockerSource   │                  │            │
 ├──────────────────────────────────────────────────┤
 │                 SQLite WAL + Ollama               │
 └──────────────────────────────────────────────────┘
