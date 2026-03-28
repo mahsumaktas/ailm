@@ -149,6 +149,7 @@ class JournaldSource:
         self._start_time: float = 0.0
         self._bus: EventBus | None = None
         self._buffer: deque[JournalEntry] = deque(maxlen=BUFFER_MAXLEN)
+        self._urgent: bool = False  # set by reader thread when critical entry arrives
         self._reader_task: asyncio.Task[None] | None = None
         self._batcher_task: asyncio.Task[None] | None = None
         self._stop_event = threading.Event()
@@ -204,16 +205,33 @@ class JournaldSource:
                 if result == journal.APPEND:
                     for entry in reader:
                         msg = entry.get("MESSAGE", "")
-                        if not msg or not matches_prefilter(msg):
+                        if not msg:
                             continue
-                        if self._noise_re is not None and self._noise_re.search(msg):
-                            continue
-                        # Skip ailm's own log messages (self-classification loop)
+
+                        priority = int(entry.get("PRIORITY", 6))
+                        transport = entry.get("_TRANSPORT", "")
+
+                        # Skip ailm's own log messages
                         if entry.get("_SYSTEMD_USER_UNIT", "") == "ailm.service":
                             continue
-                        if entry.get("SYSLOG_IDENTIFIER", "") in ("ailm", "python"):
-                            if "ailm" in msg[:50]:
+                        if entry.get("SYSLOG_IDENTIFIER", "") in ("ailm",):
+                            continue
+
+                        # Decision: should this entry be captured?
+                        # 1. Kernel messages → ALWAYS capture (OOM, Xid, panic)
+                        # 2. Priority 0-4 (EMERG-WARNING) → ALWAYS capture
+                        # 3. Priority 5-7 (NOTICE-DEBUG) → only if prefilter matches
+                        is_kernel = transport == "kernel"
+                        is_urgent = priority <= 4
+
+                        if not is_kernel and not is_urgent:
+                            if not matches_prefilter(msg):
                                 continue
+
+                        # Noise filter (skip known harmless even if priority is low)
+                        if self._noise_re is not None and self._noise_re.search(msg):
+                            if not is_kernel and priority > 3:
+                                continue  # never filter kernel EMERG/ALERT/CRIT
 
                         ts = entry.get("__REALTIME_TIMESTAMP")
                         if ts is None:
@@ -221,23 +239,40 @@ class JournaldSource:
                         elif ts.tzinfo is None:
                             ts = ts.replace(tzinfo=timezone.utc)
 
+                        unit = entry.get("_SYSTEMD_UNIT", "")
+                        if not unit and is_kernel:
+                            unit = "kernel"
+
                         je = JournalEntry(
                             message=msg,
-                            unit=entry.get("_SYSTEMD_UNIT", "unknown"),
-                            priority=int(entry.get("PRIORITY", 6)),
+                            unit=unit or "unknown",
+                            priority=priority,
                             timestamp=ts,
                         )
                         self._buffer.append(je)
+                        if priority <= 2:  # EMERG/ALERT/CRIT → urgent flush
+                            self._urgent = True
         except Exception:
             logger.exception("Journal reader loop error")
         finally:
             reader.close()
 
     async def _run_batcher(self) -> None:
-        """Periodically flush buffered entries as SystemEvents."""
+        """Flush buffered entries. Polls every 0.5s for urgent, full flush every batch_seconds."""
+        ticks = 0
+        interval = 0.5  # fast poll for urgent events
+        batch_ticks = int(self._batch_seconds / interval)
         while True:
-            await asyncio.sleep(self._batch_seconds)
-            await self._flush_buffer()
+            await asyncio.sleep(interval)
+            ticks += 1
+            # Urgent: kernel EMERG/ALERT/CRIT arrived → flush immediately
+            if self._urgent:
+                self._urgent = False
+                await self._flush_buffer()
+            # Normal: flush every batch_seconds
+            elif ticks >= batch_ticks:
+                ticks = 0
+                await self._flush_buffer()
 
     async def _flush_buffer(self) -> None:
         if not self._buffer:
