@@ -41,7 +41,7 @@ PREFILTER_RE = re.compile(
     r"timeout|refused|unreachable|dropped|"
     r"invalid user|authentication fail|permission denied|"
     r"ban |unban |brute.force|unauthorized|"
-    r"connection reset|connection closed|handshake|certificate|"
+    r"connection reset|handshake fail|certificate.*error|"
     # GPU/hardware
     r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock|"
     r"hardware error|machine check|thermal|overheat|throttl|"
@@ -49,29 +49,28 @@ PREFILTER_RE = re.compile(
     r"I/O error|read.only|remount|filesystem|fsck|"
     r"BTRFS|EXT4.*error|XFS.*error|"
     r"no space left|disk full|quota|"
-    # Systemd lifecycle
-    r"start-limit|restart|activated|deactivated|"
-    r"entered failed|main process exited|"
-    r"service.*stopped|unit.*failed|"
+    # Systemd lifecycle (only failures, not normal start/stop)
+    r"start-limit|entered failed|main process exited|"
+    r"unit.*failed|"
     # USB/bluetooth/audio
     r"usb.*disconnect|usb.*reset|usb.*overcurrent|"
     r"bluetooth.*fail|bluetooth.*error|btusb|"
     r"pipewire.*error|pulseaudio.*fail|alsa.*error|"
-    # Session/login
-    r"session opened|session closed|login|logout|"
-    r"pam_unix|new seat|removed seat|lid |suspend|resume|hibernate|"
+    # Session/login (failures + power state changes)
+    r"login.*fail|pam_unix.*fail|"
+    r"suspend|resume|hibernate|lid |"
     # Firewall
     r"iptables|nftables|DROP|REJECT|firewall|"
     # Kernel modules
     r"module.*load|insmod|modprobe|module.*fail|"
     # Wayland/display
     r"compositor|wayland.*error|wlroots|kwin.*crash|plasmashell|"
-    # Cron/scheduled
-    r"cron\[|anacron|systemd-tmpfiles|logrotate|"
+    # Cron/scheduled (only errors, not normal execution)
+    r"cron.*error|anacron.*fail|logrotate.*error|"
     # Package/update
     r"pacman|ALPM|upgrade|downgrad|"
-    # Snapper/snapshot
-    r"snapper|snapshot.*creat|snapshot.*delet"
+    # Snapper/snapshot (only actual snapshot events, not DBus lifecycle)
+    r"snapper.*error|snapshot.*creat|snapshot.*delet"
     r")"
 )
 
