@@ -335,6 +335,50 @@ class Application:
                             summary=summary,
                         ))
 
+                # RAM/swap time-to-full projection (like disk)
+                for name in ("ram_pct", "swap_pct"):
+                    if name in metrics:
+                        ema = self.trend_tracker.get_ema(name)
+                        if ema is not None and ema > 70:
+                            # Check if rising
+                            alert_check = self.trend_tracker.update(
+                                f"_{name}_projection", metrics[name],
+                                slope_threshold=_TREND_THRESHOLDS.get(name, 10.0),
+                            )
+                            if alert_check and alert_check.slope > 0:
+                                remaining = 100.0 - metrics[name]
+                                mins_to_full = remaining / alert_check.slope * 60
+                                if mins_to_full < 60:
+                                    severity = Severity.CRITICAL if mins_to_full < 15 else Severity.WARNING
+                                    await self.bus.publish(SystemEvent(
+                                        type=EventType.TREND_ALERT, severity=severity,
+                                        raw_data=f"metric={name} current={metrics[name]:.1f} mins_to_full={mins_to_full:.0f}",
+                                        source="trend",
+                                        summary=f"{'RAM' if 'ram' in name else 'Swap'} at {metrics[name]:.0f}% — OOM projected in {mins_to_full:.0f} minutes",
+                                    ))
+
+                # Top-5 memory-hungry processes
+                procs = []
+                for p in psutil.process_iter(["pid", "name", "memory_info"]):
+                    try:
+                        rss = p.info["memory_info"].rss
+                        if rss > 500 * 1024 * 1024:  # >500MB only
+                            procs.append((p.info["pid"], p.info["name"], rss))
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                procs.sort(key=lambda x: -x[2])
+                for pid, pname, rss in procs[:5]:
+                    rss_gb = rss / (1024**3)
+                    metric_key = f"proc_{pname}_{pid}_gb"
+                    self.trend_tracker.update(metric_key, rss_gb, slope_threshold=1.0)  # 1GB/hr
+                    if rss_gb > 10:  # >10GB single process
+                        await self.bus.publish(SystemEvent(
+                            type=EventType.SYSTEM_METRIC, severity=Severity.WARNING,
+                            raw_data=f"pid={pid} name={pname} rss_gb={rss_gb:.1f}",
+                            source="trend",
+                            summary=f"Process {pname} (PID {pid}) using {rss_gb:.1f} GB RAM",
+                        ))
+
                 # Event frequency tracking
                 if self.repo is not None:
                     from datetime import datetime, timedelta, timezone
