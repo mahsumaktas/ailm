@@ -1,4 +1,7 @@
-"""Application orchestrator — wires all ailm subsystems together."""
+"""Application orchestrator — wires all ailm subsystems together.
+
+v0.3 architecture: 3 collectors + batch LLM instead of 20 sources + per-event LLM.
+"""
 
 import logging
 from pathlib import Path
@@ -6,33 +9,23 @@ from pathlib import Path
 from ailm.config.schema import AilmConfig
 from ailm.core.bus import EventBus
 from ailm.core.crash import CrashDetector
-from ailm.core.dedup import DedupConfig as CoreDedupConfig, EventDedup  # alias: schema also has DedupConfig
+from ailm.core.dedup import DedupConfig as CoreDedupConfig, EventDedup
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.core.ringlog import RingBufferLog
-from ailm.core.trend import TrendTracker
 from ailm.core.status import StatusTracker
+from ailm.core.trend import TrendTracker
 from ailm.db.connection import Database
 from ailm.db.repository import EventRepository
 from ailm.hooks import HookManager
 from ailm.hooks.builtin import LoggingPlugin
-from ailm.llm import LLMTask, LLMTaskQueue, OllamaClient
+from ailm.llm import OllamaClient
+from ailm.llm.batch import BatchAnalyzer
 from ailm.scheduler import SchedulerEngine, generate_morning_briefing
 from ailm.sources.base import Source
-from ailm.sources.btrfs import BtrfsSource
-from ailm.sources.coredump import CoredumpSource
-from ailm.sources.disk import DiskMonitor
-from ailm.sources.docker import DockerSource
-from ailm.sources.hwmon import HwmonSource
-from ailm.sources.network import ServicePortSource, TailscaleSource
-from ailm.sources.nvidia import NvidiaSource
-from ailm.sources.orphan import OrphanSource
-from ailm.sources.pressure import PressureSource
-from ailm.sources.syshealth import SysHealthSource
-from ailm.sources.security import SecuritySource
-from ailm.sources.smart import SmartSource
+from ailm.sources.external import ExternalCollector
 from ailm.sources.journald import JournaldSource
+from ailm.sources.metrics import MetricsCollector
 from ailm.sources.pacman import PacmanSource
-from ailm.sources.pacnew import PacnewSource
 from ailm.sources.reboot import RebootSource
 from ailm.sources.services import ServiceMonitor
 from ailm.sources.snapshot import SnapshotSource
@@ -41,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class Application:
-    """Top-level orchestrator that owns and manages every subsystem."""
+    """Top-level orchestrator — 3 collectors + batch LLM."""
 
     def __init__(self, config: AilmConfig) -> None:
         self.config = config
@@ -49,34 +42,33 @@ class Application:
         self.db: Database | None = None
         self.repo: EventRepository | None = None
         self.llm: OllamaClient | None = None
-        self.llm_queue = LLMTaskQueue()
+        self.batch_analyzer: BatchAnalyzer | None = None
         self.hooks = HookManager()
         self.status_tracker = StatusTracker()
-        self.ringlog: RingBufferLog | None = None
-        self._crash_detector: CrashDetector | None = None
         self.scheduler: SchedulerEngine | None = None
         self.trend_tracker = TrendTracker(
             alpha=config.trend.alpha,
             window_size=config.trend.fast_window_size,
             cooldown_seconds=config.trend.cooldown_seconds,
         )
+        self.ringlog: RingBufferLog | None = None
+        self._crash_detector: CrashDetector | None = None
         self.sources: list[Source] = []
         self._started = False
-        self._llm_call_times: list[float] = []
 
     async def start(self) -> None:
         """Boot all subsystems in dependency order."""
-        # 1. Connect DB
+        # 1. DB
         self.db = Database(self.config.db.path)
         await self.db.connect()
         self.repo = EventRepository(self.db)
         logger.info("Database connected")
 
-        # 2. Start EventBus
+        # 2. EventBus
         await self.bus.start()
         logger.info("EventBus started")
 
-        # 3. Start LLM client (if enabled)
+        # 3. LLM
         if self.config.llm.enabled:
             self.llm = OllamaClient(
                 base_url=self.config.llm.base_url,
@@ -85,12 +77,9 @@ class Application:
             )
             await self.llm.start()
             self.status_tracker.set_llm_available(self.llm.available)
-            if self.llm.available:
-                logger.info("LLM client connected")
-            else:
-                logger.warning("LLM client started but Ollama not reachable")
+            logger.info("LLM %s", "connected" if self.llm.available else "unavailable")
 
-        # 4. Ring buffer log (crash-resilient)
+        # 4. Ring buffer log
         data_dir = Path(self.config.db.path).parent
         if self.config.ringlog.enabled:
             self.ringlog = RingBufferLog(
@@ -101,45 +90,38 @@ class Application:
             )
             self.ringlog.open()
 
-        # 5. Boot crash detection (after ring log, before sources)
+        # 5. Crash detection
         self._crash_detector = CrashDetector(data_dir, self.ringlog)
-        crash_report = self._crash_detector.on_start()
-        if crash_report is not None:
+        crash = self._crash_detector.on_start()
+        if crash is not None:
             await self.bus.publish(SystemEvent(
-                type=EventType.BOOT_ANALYSIS,
-                severity=Severity.WARNING,
-                raw_data=f"prev_state={crash_report.previous_state} lines={len(crash_report.pre_crash_log)}",
-                source="ailm",
-                summary=crash_report.analysis,
+                type=EventType.BOOT_ANALYSIS, severity=Severity.WARNING,
+                raw_data=f"prev_state={crash.previous_state}",
+                source="ailm", summary=crash.analysis,
             ))
 
-        # 6. Wire bus subscribers BEFORE sources start (so no startup events are lost)
-        self.bus.subscribe(None, self._persist_event)       # → DB
-        self.bus.subscribe(None, self.status_tracker.on_event)  # → StatusTracker
-        self.bus.subscribe(None, self._fire_hook_event)     # → Hooks
+        # 6. Bus subscribers
+        self.bus.subscribe(None, self._persist_event)
+        self.bus.subscribe(None, self.status_tracker.on_event)
+        self.bus.subscribe(None, self._fire_hook_event)
         if self.ringlog is not None:
-            self.bus.subscribe(None, self._ringlog_event)  # → Ring log
-        self.bus.subscribe(EventType.LOG_ANOMALY, self._classify_log_event)  # → LLM
+            self.bus.subscribe(None, self._ringlog_event)
 
-        # 5. Register and start event sources
+        # 7. Sources (3 collectors + 4 kept sources)
         self._register_sources()
         for source in self.sources:
             await source.start(self.bus)
             logger.info("Source started: %s", source.name)
 
-        # 6. Setup scheduler
+        # 8. Scheduler
         self.scheduler = SchedulerEngine()
         await self.scheduler.start()
         await self._setup_schedules()
         logger.info("Scheduler started")
 
-        # 8. Wire status tracker → hooks
+        # 9. Hooks
         self.status_tracker.on_status_change(self.hooks.fire_status_change)
-
-        # 9. Register built-in hooks
         self.hooks.register(LoggingPlugin())
-
-        # 10. Fire startup hooks
         self.hooks.fire_startup()
         self._started = True
         logger.info("Application started — all systems wired")
@@ -148,58 +130,46 @@ class Application:
         """Shut down all subsystems in reverse order."""
         if not self._started:
             return
-
-        # 1. Fire shutdown hooks
         self.hooks.fire_shutdown()
-
-        # 2. Stop scheduler
         if self.scheduler is not None:
             await self.scheduler.stop()
             self.scheduler = None
-
-        # 3. Stop sources
         for source in reversed(self.sources):
             await source.stop()
         self.sources.clear()
-
-        # 4. Stop LLM client
         if self.llm is not None:
             await self.llm.close()
             self.llm = None
-
-        # 5. Stop EventBus
         await self.bus.stop()
-
-        # 6. Mark clean shutdown
         if self._crash_detector is not None:
             self._crash_detector.on_stop()
             self._crash_detector = None
-
-        # 7. Close ring log
         if self.ringlog is not None:
             self.ringlog.close()
             self.ringlog = None
-
-        # 7. Close DB
         if self.db is not None:
             await self.db.close()
             self.db = None
             self.repo = None
-
         self._started = False
         logger.info("Application stopped")
 
     def _register_sources(self) -> None:
-        """Conditionally register sources based on config."""
+        """Register 3 collectors + 4 kept sources."""
         cfg = self.config.sources
 
-        self.sources.append(
-            DiskMonitor(
-                cfg.disk_warn_pct, cfg.disk_critical_pct, cfg.disk_interval,
-                trend_tracker=self.trend_tracker,
-                slope_threshold=cfg.disk_slope_threshold,
-            )
-        )
+        # Collector 1: All system metrics (replaces 7+ sources + health_job)
+        self.sources.append(MetricsCollector(
+            interval=30,
+            trend=self.trend_tracker,
+            disk_warn=cfg.disk_warn_pct,
+            disk_crit=cfg.disk_critical_pct,
+        ))
+
+        # Collector 2: External services (replaces 6+ sources)
+        self.sources.append(ExternalCollector(interval=60))
+
+        # Kept sources (already efficient)
         self.sources.append(ServiceMonitor(interval=cfg.service_interval))
         self.sources.append(PacmanSource(cfg.pacman_log_path))
         self.sources.append(RebootSource())
@@ -207,38 +177,18 @@ class Application:
         if Path(cfg.snapshot_path).is_dir():
             self.sources.append(SnapshotSource(cfg.snapshot_path))
 
-        self.sources.append(PacnewSource())
-        self.sources.append(DockerSource())
-        self.sources.append(NvidiaSource(interval=30, trend_tracker=self.trend_tracker))
-        self.sources.append(SmartSource())
-        self.sources.append(TailscaleSource())
-        self.sources.append(ServicePortSource())
-        self.sources.append(SecuritySource())
-        self.sources.append(OrphanSource())
-        self.sources.append(PressureSource(interval=30, trend_tracker=self.trend_tracker))
-        self.sources.append(HwmonSource(interval=30, trend_tracker=self.trend_tracker))
-        self.sources.append(SysHealthSource(interval=60, trend_tracker=self.trend_tracker))
-        self.sources.append(BtrfsSource())
-        self.sources.append(CoredumpSource())
-        # Second NVMe if present
-        if Path("/dev/nvme1").exists():
-            self.sources.append(SmartSource(device="/dev/nvme1"))
-
         if cfg.journald_enabled:
-            dedup_cfg = self.config.dedup
-            dedup = EventDedup(CoreDedupConfig.from_pydantic(dedup_cfg))
-            self.sources.append(JournaldSource(
-                dedup=dedup,
-                noise_patterns=cfg.noise_patterns,
-            ))
+            dedup = EventDedup(CoreDedupConfig.from_pydantic(self.config.dedup))
+            self.sources.append(JournaldSource(dedup=dedup))
 
     async def _setup_schedules(self) -> None:
-        """Configure scheduled jobs."""
+        """Configure scheduled jobs — simple and focused."""
         if self.scheduler is None or self.db is None:
             return
 
-        llm = self.llm  # may be None — briefing uses fallback
+        llm = self.llm
 
+        # Morning briefing (06:00)
         async def briefing_job() -> None:
             await generate_morning_briefing(self.db, llm, self.bus)
 
@@ -246,6 +196,7 @@ class Application:
             briefing_job, self.config.scheduler.briefing_cron, job_id="morning_briefing",
         )
 
+        # DB cleanup (03:00)
         retention = self.config.db.retention_days
 
         async def cleanup_job() -> None:
@@ -256,164 +207,41 @@ class Application:
 
         await self.scheduler.add_cron_job(cleanup_job, "0 3 * * *", job_id="db_cleanup")
 
-        # Metric thresholds: metric_name -> slope_threshold (units/hour)
-        # NOTE: disk_usage_pct is intentionally absent — DiskMonitor already feeds
-        # this metric into the shared TrendTracker on its own schedule.  Feeding it
-        # here too (every 30 s vs DiskMonitor's ~300 s) biases the slope window and
-        # produces duplicate TREND_ALERT events.
-        _TREND_THRESHOLDS = {
-            "cpu_pct": 20.0,          # sustained CPU climb >20%/hr
-            "ram_pct": 10.0,          # memory leak >10%/hr
-            "swap_pct": 5.0,          # swap growth >5%/hr
-            "net_recv_mbps": 50.0,    # unusual incoming traffic
-            "net_sent_mbps": 50.0,    # unusual outgoing traffic
-        }
-
-        # Track previous network counters for delta
-        _prev_net = {"recv": 0, "sent": 0, "time": 0.0}
-
-        # Periodic health + status prune + queue drain + trend sampling (every 30s)
+        # Health check (every 30s) — just LLM health + status prune
         async def health_job() -> None:
             self.status_tracker.prune()
-
-            # System metrics → TrendTracker (30s intervals)
-            try:
-                import time as _time
-                import psutil
-
-                now_mono = _time.monotonic()
-
-                # CPU (non-blocking, 0-interval returns since last call)
-                cpu_pct = psutil.cpu_percent(interval=0)
-
-                # Memory
-                mem = psutil.virtual_memory()
-                ram_pct = mem.percent
-                swap = psutil.swap_memory()
-                swap_pct = swap.percent
-
-                # Network (delta since last call → Mbps)
-                net = psutil.net_io_counters()
-                dt = now_mono - _prev_net["time"] if _prev_net["time"] > 0 else 30.0
-                if dt > 0 and _prev_net["time"] > 0:
-                    recv_mbps = (net.bytes_recv - _prev_net["recv"]) * 8 / dt / 1_000_000
-                    sent_mbps = (net.bytes_sent - _prev_net["sent"]) * 8 / dt / 1_000_000
-                else:
-                    recv_mbps = 0.0
-                    sent_mbps = 0.0
-                _prev_net["recv"] = net.bytes_recv
-                _prev_net["sent"] = net.bytes_sent
-                _prev_net["time"] = now_mono
-
-                # Feed all metrics to trend tracker
-                metrics = {
-                    "cpu_pct": cpu_pct,
-                    "ram_pct": ram_pct,
-                    "swap_pct": swap_pct,
-                    "net_recv_mbps": recv_mbps,
-                    "net_sent_mbps": sent_mbps,
-                }
-                for name, value in metrics.items():
-                    threshold = _TREND_THRESHOLDS.get(name)
-                    if threshold is None:
-                        continue
-                    alert = self.trend_tracker.update(name, value, slope_threshold=threshold)
-                    if alert is not None:
-                        summary = alert.summary
-                        await self.bus.publish(SystemEvent(
-                            type=EventType.TREND_ALERT,
-                            severity=Severity.WARNING,
-                            raw_data=f"metric={alert.metric} slope={alert.slope:.3f} ema={alert.ema:.1f} current={alert.current_value:.1f}",
-                            source="trend",
-                            summary=summary,
-                        ))
-
-                # RAM/swap time-to-full projection (like disk)
-                for name in ("ram_pct", "swap_pct"):
-                    if name in metrics:
-                        ema = self.trend_tracker.get_ema(name)
-                        if ema is not None and ema > 70:
-                            # Check if rising
-                            alert_check = self.trend_tracker.update(
-                                f"_{name}_projection", metrics[name],
-                                slope_threshold=_TREND_THRESHOLDS.get(name, 10.0),
-                            )
-                            if alert_check and alert_check.slope > 0:
-                                remaining = 100.0 - metrics[name]
-                                mins_to_full = remaining / alert_check.slope * 60
-                                if mins_to_full < 60:
-                                    severity = Severity.CRITICAL if mins_to_full < 15 else Severity.WARNING
-                                    await self.bus.publish(SystemEvent(
-                                        type=EventType.TREND_ALERT, severity=severity,
-                                        raw_data=f"metric={name} current={metrics[name]:.1f} mins_to_full={mins_to_full:.0f}",
-                                        source="trend",
-                                        summary=f"{'RAM' if 'ram' in name else 'Swap'} at {metrics[name]:.0f}% — OOM projected in {mins_to_full:.0f} minutes",
-                                    ))
-
-                # Top-5 memory-hungry processes
-                procs = []
-                for p in psutil.process_iter(["pid", "name", "memory_info"]):
-                    try:
-                        rss = p.info["memory_info"].rss
-                        if rss > 500 * 1024 * 1024:  # >500MB only
-                            procs.append((p.info["pid"], p.info["name"], rss))
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-                procs.sort(key=lambda x: -x[2])
-                for pid, pname, rss in procs[:5]:
-                    rss_gb = rss / (1024**3)
-                    # Use name-only key (no PID) to prevent unbounded TrendTracker
-                    # growth when processes restart and acquire different PIDs.
-                    metric_key = f"proc_{pname}_gb"
-                    self.trend_tracker.update(metric_key, rss_gb, slope_threshold=1.0)  # 1GB/hr
-                    if rss_gb > 10:  # >10GB single process
-                        await self.bus.publish(SystemEvent(
-                            type=EventType.SYSTEM_METRIC, severity=Severity.WARNING,
-                            raw_data=f"pid={pid} name={pname} rss_gb={rss_gb:.1f}",
-                            source="trend",
-                            summary=f"Process {pname} (PID {pid}) using {rss_gb:.1f} GB RAM",
-                        ))
-
-                # Event frequency tracking
-                if self.repo is not None:
-                    from datetime import datetime, timedelta, timezone
-                    one_hr_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-                    counts = await self.repo.get_event_count_by_type(one_hr_ago)
-                    total_per_hr = sum(counts.values())
-                    self.trend_tracker.update(
-                        "events_per_hour", float(total_per_hr), slope_threshold=100.0,
-                    )
-            except Exception:
-                pass  # psutil failure should not break health check
-
             if self.llm is not None:
-                was_available = self.llm.available
+                was = self.llm.available
                 await self.llm.health_check()
                 self.status_tracker.set_llm_available(self.llm.available)
-                if self.llm.available and not was_available:
-                    drained = await self.llm_queue.drain(self.llm)
-                    if drained:
-                        logger.info("LLM back online, drained %d queued tasks", drained)
 
         await self.scheduler.add_interval_job(health_job, 30, job_id="health_check")
 
+        # Batch LLM analysis (every 5 minutes)
+        if self.repo is not None:
+            self.batch_analyzer = BatchAnalyzer(self.repo, self.llm, self.bus)
+
+            async def batch_job() -> None:
+                if self.batch_analyzer is not None:
+                    await self.batch_analyzer.analyze_batch()
+
+            await self.scheduler.add_interval_job(batch_job, 300, job_id="batch_analysis")
+
     async def reload_config(self) -> None:
-        """Reload config from disk and apply changes to running subsystems."""
+        """Reload config from disk and apply changes."""
         from ailm.config import load_config
 
         try:
             new_config = load_config()
         except Exception:
-            logger.exception("Config reload failed — keeping current config")
+            logger.exception("Config reload failed")
             return
 
         changes: list[str] = []
         old = self.config
 
-        # LLM model/timeout change
         if (new_config.llm.model != old.llm.model
-                or new_config.llm.timeout != old.llm.timeout
-                or new_config.llm.base_url != old.llm.base_url):
+                or new_config.llm.timeout != old.llm.timeout):
             if self.llm is not None:
                 await self.llm.close()
                 self.llm = None
@@ -427,73 +255,40 @@ class Application:
                     await self.llm.start()
                     changes.append(f"LLM: {old.llm.model} -> {new_config.llm.model}")
                 except Exception:
-                    logger.exception("Failed to start new LLM client, restoring old")
-                    try:
-                        self.llm = OllamaClient(
-                            base_url=old.llm.base_url,
-                            model=old.llm.model,
-                            timeout=old.llm.timeout,
-                        )
-                        await self.llm.start()
-                    except Exception:
-                        logger.exception("Rollback also failed, LLM disabled until next reload")
-                        self.llm = None
-
-        # Source intervals
-        for source in self.sources:
-            if source.name == "disk" and hasattr(source, "_interval"):
-                if new_config.sources.disk_interval != old.sources.disk_interval:
-                    source._interval = new_config.sources.disk_interval
-                    changes.append(f"disk_interval: {old.sources.disk_interval}s -> {new_config.sources.disk_interval}s")
-
-        # Dedup config
-        if (new_config.dedup.window_seconds != old.dedup.window_seconds
-                or new_config.dedup.baseline_seconds != old.dedup.baseline_seconds
-                or new_config.dedup.max_per_source_per_minute != old.dedup.max_per_source_per_minute):
-            for source in self.sources:
-                if hasattr(source, "_dedup") and source._dedup is not None:
-                    source._dedup.config = CoreDedupConfig.from_pydantic(new_config.dedup)
-                    changes.append("dedup config updated")
-                    break
+                    logger.exception("New LLM failed, disabling")
+                    self.llm = None
 
         self.config = new_config
-
         if changes:
             logger.info("Config reloaded: %s", "; ".join(changes))
         else:
-            logger.info("Config reloaded: no changes detected")
+            logger.info("Config reloaded: no changes")
 
     async def maybe_insert_welcome(self) -> None:
-        """Insert a welcome BRIEFING event on first run (empty DB)."""
+        """Insert a welcome event on first run."""
         if self.repo is None:
             return
         existing = await self.repo.get_recent_events(limit=1)
         if existing:
             return
-        welcome = SystemEvent(
+        await self.repo.insert_event(SystemEvent(
             type=EventType.BRIEFING, severity=Severity.INFO,
             raw_data="first_run", source="ailm",
-            summary="Welcome to ailm! I watch your system — packages, services, "
-                    "disk usage, logs — and surface what matters. Daily briefing at 06:00.",
-        )
-        await self.repo.insert_event(welcome)
-        logger.info("First run — welcome briefing inserted")
+            summary="Welcome to ailm! Monitoring your system 24/7.",
+        ))
 
     async def _persist_event(self, event: SystemEvent) -> None:
-        """Bus subscriber: persist every event to DB."""
         if self.repo is None:
             return
         try:
             await self.repo.insert_event(event)
         except Exception:
-            logger.exception("Failed to persist event: %s/%s", event.type.value, event.source)
+            logger.exception("Failed to persist event")
 
     def _fire_hook_event(self, event: SystemEvent) -> None:
-        """Bus subscriber: forward events to hook system."""
         self.hooks.fire_event(event)
 
     def _ringlog_event(self, event: SystemEvent) -> None:
-        """Bus subscriber: write events to crash-resilient ring log."""
         if self.ringlog is None:
             return
         self.ringlog.write(
@@ -504,105 +299,3 @@ class Application:
         )
         if event.severity == Severity.CRITICAL:
             self.ringlog.sync_now()
-
-    _LLM_MAX_PER_MINUTE = 10
-
-    async def _classify_log_event(self, event: SystemEvent) -> None:
-        """Bus subscriber (LOG_ANOMALY only): fire-and-forget classification.
-
-        Rate-limited to _LLM_MAX_PER_MINUTE calls. Only WARNING+ events
-        get LLM classification; INFO events get a simple summary instead.
-        """
-        if event.summary is not None:
-            return
-        if self.llm is None:
-            return
-
-        # INFO events: simple summary from raw_data, skip LLM
-        if event.severity == Severity.INFO:
-            raw = event.raw_data
-            if "msg=" in raw:
-                event.summary = raw[raw.index("msg=") + 4:][:120]
-            else:
-                event.summary = raw[:120]
-            return
-
-        # LLM rate limit: max N per minute
-        import time as _time
-        now = _time.monotonic()
-        self._llm_call_times = [t for t in self._llm_call_times if now - t < 60]
-        if len(self._llm_call_times) >= self._LLM_MAX_PER_MINUTE:
-            # Over limit: use simple summary
-            raw = event.raw_data
-            if "msg=" in raw:
-                event.summary = raw[raw.index("msg=") + 4:][:120]
-            else:
-                event.summary = raw[:120]
-            return
-
-        self._llm_call_times.append(now)
-        import asyncio
-        asyncio.create_task(self._do_classify(event))
-
-    _VALID_ACTIONS = frozenset({"restart_service", "reboot", "investigate"})
-
-    async def _do_classify(self, event: SystemEvent) -> None:
-        """Background classification task — runs after bus dispatch completes."""
-        try:
-            if self.llm is not None and self.llm.available:
-                result = await self.llm.classify_log(event.raw_data)
-                if result is not None:
-                    await self._apply_classification(event, result)
-                    return
-
-            # LLM unavailable — queue for later
-            from ailm.llm.prompts import CLASSIFICATION_SYSTEM, build_classification_prompt
-
-            async def on_classified(result_str: str) -> None:
-                try:
-                    import json
-                    parsed = json.loads(result_str)
-                except (json.JSONDecodeError, AttributeError):
-                    parsed = {"summary": result_str[:120]}
-                await self._apply_classification(event, parsed)
-
-            self.llm_queue.enqueue(LLMTask(
-                prompt=build_classification_prompt(event.raw_data),
-                system=CLASSIFICATION_SYSTEM,
-                callback=on_classified,
-            ))
-        except Exception:
-            logger.debug("Classification failed for event %s", event.id)
-
-    async def _apply_classification(self, event: SystemEvent, result: dict) -> None:
-        """Apply LLM classification result to event and persist changes."""
-        from ailm.core.dedup import summary_fingerprint
-        from ailm.core.models import Severity, severity_max
-
-        # Summary + root cause (append if present)
-        summary = result.get("summary", event.raw_data[:120])
-        root_cause = result.get("root_cause", "")
-        if root_cause and len(summary) + len(root_cause) < 200:
-            summary = f"{summary} — {root_cause}"
-        event.summary = summary
-        event.summary_hash = summary_fingerprint(summary)
-
-        # Severity upgrade (never downgrade)
-        llm_sev = result.get("severity", "").lower()
-        if llm_sev in ("info", "warning", "critical"):
-            upgraded = severity_max(event.severity, Severity(llm_sev))
-            if upgraded != event.severity:
-                event.severity = upgraded
-
-        # Action (with noise override)
-        action = result.get("action", "").lower()
-        if action == "ignore":
-            event.user_action = None  # don't store "ignore" as action
-        elif action in self._VALID_ACTIONS:
-            event.user_action = action
-
-        # Persist to DB
-        if event.id is not None and self.repo is not None:
-            await self.repo.update_summary(event.id, summary, event.summary_hash)
-            if event.user_action:
-                await self.repo.update_user_action(event.id, event.user_action)

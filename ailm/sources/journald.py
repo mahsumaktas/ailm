@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ailm.core.bus import EventBus
-from ailm.core.dedup import DedupAction, EventDedup, fingerprint
+from ailm.core.dedup import DedupAction, EventDedup, fingerprint  # noqa: F401 — used in flush
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import cancel_task
 
@@ -27,87 +27,14 @@ try:
 except ImportError:
     HAS_SYSTEMD = False
 
-# Comprehensive prefilter — catch every meaningful system event.
-# Comprehensive prefilter — grouped by category.
-# Priority 0-4 and kernel messages bypass this filter entirely.
-# This only applies to priority 5-7 (NOTICE/INFO/DEBUG).
-PREFILTER_RE = re.compile(
-    r"(?i)\b("
-    # Core errors
-    r"error|critical|fail|denied|panic|fatal|abort|corrupt|"
-    r"emergency|alert|warning|degraded|"
-    # Process/memory
-    r"oom|segfault|killed|coredump|core dump|"
-    r"out of memory|cannot allocate|memory pressure|"
-    r"earlyoom|oom_reaper|invoked oom|"
-    # Network/auth/DNS
-    r"timeout|refused|unreachable|dropped|"
-    r"invalid user|authentication fail|permission denied|"
-    r"ban |unban |brute.force|unauthorized|"
-    r"connection reset|handshake fail|certificate.*error|"
-    r"DNSSEC|resolve.*fail|no.*servers.*reached|"
-    r"NetworkManager.*connect|NetworkManager.*disconnect|"
-    r"wpa_supplicant.*fail|wpa_supplicant.*auth|"
-    r"carrier.*lost|link.*down|IP.*changed|"
-    # GPU/hardware
-    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock|"
-    r"hardware error|machine check|thermal|overheat|throttl|"
-    r"coolercontrol|fan.*speed|"
-    # Disk/filesystem
-    r"I/O error|read.only|remount|filesystem|fsck|"
-    r"BTRFS|EXT4.*error|XFS.*error|btrfs.*scrub|"
-    r"no space left|disk full|quota|"
-    r"SMART.*error|smartd|fstrim|TRIM|"
-    # Systemd lifecycle (failures + important state changes)
-    r"start-limit|entered failed|main process exited|"
-    r"unit.*failed|"
-    r"timer.*fail|timer.*miss|"
-    # USB/bluetooth/audio/thunderbolt
-    r"usb.*disconnect|usb.*reset|usb.*overcurrent|usb.*new.*device|"
-    r"bluetooth.*fail|bluetooth.*error|btusb|"
-    r"pipewire.*error|pulseaudio.*fail|alsa.*error|"
-    r"thunderbolt|bolt.*device|"
-    # Session/login/power
-    r"login.*fail|pam_unix.*fail|"
-    r"suspend|resume|hibernate|lid |"
-    r"earlyoom|systemd-oomd|"
-    # Firewall
-    r"iptables|nftables|DROP|REJECT|firewall|"
-    # Kernel modules/DKMS
-    r"module.*load|insmod|modprobe|module.*fail|"
-    r"dkms.*build|dkms.*install|dkms.*error|"
-    # Display/compositor
-    r"compositor|wayland.*error|wlroots|kwin.*crash|plasmashell|"
-    r"Xorg.*error|sddm|display.*manager|"
-    # Scheduled tasks
-    r"cron.*error|anacron.*fail|logrotate.*error|"
-    r"paccache|pacman.*hook|"
-    # Package/update
-    r"pacman|ALPM|upgrade|downgrad|flatpak.*update|"
-    # Snapper/boot
-    r"snapper.*error|snapshot.*creat|snapshot.*delet|"
-    r"limine|grub|bootloader|"
-    # Remote access
-    r"rustdesk|sunshine.*stream|moonlight|"
-    # Scheduling/priority
-    r"ananicy|nice.*chang|ionice|"
-    # Virtualization/containers
-    r"docker.*error|containerd.*error|podman|"
-    r"vfio|iommu.*error"
-    r")"
-)
+# v0.3: No regex prefilter. Priority-based filtering only.
+# Priority 0-4 (EMERG-WARNING) + kernel transport → always capture.
+# Priority 5-7 (NOTICE-DEBUG) → skip (batch LLM handles noise).
 
 BATCH_SECONDS = 5
 BUFFER_MAXLEN = 5000
 FLUSH_YIELD_EVERY = 100  # yield to event loop every N publishes
 
-
-def compile_noise_filter(patterns: list[str]) -> re.Pattern | None:
-    """Compile a list of regex patterns into a single combined pattern."""
-    if not patterns:
-        return None
-    combined = "|".join(f"(?:{p})" for p in patterns)
-    return re.compile(combined, re.IGNORECASE)
 
 _PRIORITY_MAP: dict[int, Severity] = {
     0: Severity.CRITICAL,  # EMERG
@@ -146,10 +73,6 @@ def priority_to_severity(priority: int) -> Severity:
     return _PRIORITY_MAP.get(priority, Severity.INFO)
 
 
-def matches_prefilter(message: str) -> bool:
-    """Return whether a journal message is interesting enough to buffer."""
-    return PREFILTER_RE.search(message) is not None
-
 
 class JournaldSource:
     """Journald event source with regex pre-filter, dedup, and batched dispatch."""
@@ -161,14 +84,12 @@ class JournaldSource:
         batch_seconds: float = BATCH_SECONDS,
         dedup: EventDedup | None = None,
         startup_grace_seconds: float = 10.0,
-        noise_patterns: list[str] | None = None,
     ) -> None:
         if batch_seconds <= 0:
             raise ValueError("batch_seconds must be positive")
         self._batch_seconds = batch_seconds
         self._dedup = dedup
         self._startup_grace = startup_grace_seconds
-        self._noise_re = compile_noise_filter(noise_patterns or [])
         self._start_time: float = 0.0
         self._bus: EventBus | None = None
         self._buffer: deque[JournalEntry] = deque(maxlen=BUFFER_MAXLEN)
@@ -240,21 +161,12 @@ class JournaldSource:
                         if entry.get("SYSLOG_IDENTIFIER", "") in ("ailm",):
                             continue
 
-                        # Decision: should this entry be captured?
-                        # 1. Kernel messages → ALWAYS capture (OOM, Xid, panic)
-                        # 2. Priority 0-4 (EMERG-WARNING) → ALWAYS capture
-                        # 3. Priority 5-7 (NOTICE-DEBUG) → only if prefilter matches
+                        # v0.3: Priority-based only, no regex prefilter
+                        # Kernel + priority 0-4 → always capture
+                        # Priority 5-7 → skip (batch LLM handles later)
                         is_kernel = transport == "kernel"
-                        is_urgent = priority <= 4
-
-                        if not is_kernel and not is_urgent:
-                            if not matches_prefilter(msg):
-                                continue
-
-                        # Noise filter (skip known harmless even if priority is low)
-                        if self._noise_re is not None and self._noise_re.search(msg):
-                            if not is_kernel and priority > 3:
-                                continue  # never filter kernel EMERG/ALERT/CRIT
+                        if not is_kernel and priority > 4:
+                            continue
 
                         ts = entry.get("__REALTIME_TIMESTAMP")
                         if ts is None:

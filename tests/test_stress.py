@@ -12,7 +12,7 @@ from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.db.connection import Database
 from ailm.db.repository import EventRepository
 from ailm.llm.queue import LLMTask, LLMTaskQueue
-from ailm.sources.journald import JournalEntry, JournaldSource, matches_prefilter
+from ailm.sources.journald import JournalEntry, JournaldSource
 
 
 def _make_event(
@@ -221,20 +221,7 @@ class TestJournaldStress:
 
         assert len(events) == 5000
 
-    def test_prefilter_performance(self):
-        """Pre-filter handles 100K lines without choking."""
-        normal = "Started Session 42 of user mahsum"
-        matched = "kernel: segfault at 0x0000"
-
-        match_count = 0
-        for _ in range(100_000):
-            if matches_prefilter(normal):
-                match_count += 1
-            if matches_prefilter(matched):
-                match_count += 1
-
-        # Every matched line should match, no normal lines
-        assert match_count == 100_000
+    # Prefilter removed in v0.3 — priority-based filtering only
 
 
 # --- Source lifecycle stress ---

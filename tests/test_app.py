@@ -256,7 +256,8 @@ class TestSourceRegistration:
         app._register_sources()
 
         names = [s.name for s in app.sources]
-        assert "disk" in names
+        assert "metrics" in names
+        assert "external" in names
         assert "services" in names
         assert "pacman" in names
         assert "reboot" in names
@@ -302,22 +303,22 @@ class TestSourceRegistration:
         assert "snapshot" in names
 
     def test_source_count_minimal(self, app_config):
-        """With journald off and no snapshots."""
+        """v0.3: 3 collectors + 3 kept sources (no snapshot/journald)."""
         from ailm.app import Application
 
         app = Application(app_config)
         app._register_sources()
-        # Count depends on available hardware — use >= minimum
-        assert len(app.sources) >= 15  # at least 15 without snapshot/journald
+        # metrics, external, services, pacman, reboot = 5
+        assert len(app.sources) == 5
 
     def test_source_count_all(self, app_config_snapshots):
-        """With snapshots dir and journald."""
+        """v0.3: + snapshot + journald = 7."""
         from ailm.app import Application
 
         app_config_snapshots.sources.journald_enabled = True
         app = Application(app_config_snapshots)
         app._register_sources()
-        assert len(app.sources) >= 17  # at least 17 with snapshot+journald
+        assert len(app.sources) == 7
 
 
 # ---------------------------------------------------------------------------
