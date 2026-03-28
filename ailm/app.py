@@ -510,15 +510,43 @@ class Application:
         if event.severity == Severity.CRITICAL:
             self.ringlog.sync_now()
 
+    _LLM_MAX_PER_MINUTE = 10
+    _llm_call_times: list[float] = []
+
     async def _classify_log_event(self, event: SystemEvent) -> None:
         """Bus subscriber (LOG_ANOMALY only): fire-and-forget classification.
 
-        Spawns a background task so bus dispatch is not blocked by LLM latency.
+        Rate-limited to _LLM_MAX_PER_MINUTE calls. Only WARNING+ events
+        get LLM classification; INFO events get a simple summary instead.
         """
         if event.summary is not None:
             return
         if self.llm is None:
             return
+
+        # INFO events: simple summary from raw_data, skip LLM
+        if event.severity == Severity.INFO:
+            raw = event.raw_data
+            if "msg=" in raw:
+                event.summary = raw[raw.index("msg=") + 4:][:120]
+            else:
+                event.summary = raw[:120]
+            return
+
+        # LLM rate limit: max N per minute
+        import time as _time
+        now = _time.monotonic()
+        self._llm_call_times = [t for t in self._llm_call_times if now - t < 60]
+        if len(self._llm_call_times) >= self._LLM_MAX_PER_MINUTE:
+            # Over limit: use simple summary
+            raw = event.raw_data
+            if "msg=" in raw:
+                event.summary = raw[raw.index("msg=") + 4:][:120]
+            else:
+                event.summary = raw[:120]
+            return
+
+        self._llm_call_times.append(now)
         import asyncio
         asyncio.create_task(self._do_classify(event))
 
