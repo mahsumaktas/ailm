@@ -62,6 +62,7 @@ class Application:
         )
         self.sources: list[Source] = []
         self._started = False
+        self._llm_call_times: list[float] = []
 
     async def start(self) -> None:
         """Boot all subsystems in dependency order."""
@@ -256,8 +257,11 @@ class Application:
         await self.scheduler.add_cron_job(cleanup_job, "0 3 * * *", job_id="db_cleanup")
 
         # Metric thresholds: metric_name -> slope_threshold (units/hour)
+        # NOTE: disk_usage_pct is intentionally absent — DiskMonitor already feeds
+        # this metric into the shared TrendTracker on its own schedule.  Feeding it
+        # here too (every 30 s vs DiskMonitor's ~300 s) biases the slope window and
+        # produces duplicate TREND_ALERT events.
         _TREND_THRESHOLDS = {
-            "disk_usage_pct": self.config.sources.disk_slope_threshold,  # %/hr
             "cpu_pct": 20.0,          # sustained CPU climb >20%/hr
             "ram_pct": 10.0,          # memory leak >10%/hr
             "swap_pct": 5.0,          # swap growth >5%/hr
@@ -278,9 +282,6 @@ class Application:
                 import psutil
 
                 now_mono = _time.monotonic()
-
-                # Disk
-                disk_pct = psutil.disk_usage("/").percent
 
                 # CPU (non-blocking, 0-interval returns since last call)
                 cpu_pct = psutil.cpu_percent(interval=0)
@@ -306,7 +307,6 @@ class Application:
 
                 # Feed all metrics to trend tracker
                 metrics = {
-                    "disk_usage_pct": disk_pct,
                     "cpu_pct": cpu_pct,
                     "ram_pct": ram_pct,
                     "swap_pct": swap_pct,
@@ -320,13 +320,6 @@ class Application:
                     alert = self.trend_tracker.update(name, value, slope_threshold=threshold)
                     if alert is not None:
                         summary = alert.summary
-                        # Disk time-to-full projection
-                        if name == "disk_usage_pct" and alert.slope > 0:
-                            remaining = 100.0 - alert.current_value
-                            hours_to_full = remaining / alert.slope
-                            if hours_to_full < 72:
-                                days = hours_to_full / 24
-                                summary += f" — projected full in {days:.1f} days"
                         await self.bus.publish(SystemEvent(
                             type=EventType.TREND_ALERT,
                             severity=Severity.WARNING,
@@ -369,7 +362,9 @@ class Application:
                 procs.sort(key=lambda x: -x[2])
                 for pid, pname, rss in procs[:5]:
                     rss_gb = rss / (1024**3)
-                    metric_key = f"proc_{pname}_{pid}_gb"
+                    # Use name-only key (no PID) to prevent unbounded TrendTracker
+                    # growth when processes restart and acquire different PIDs.
+                    metric_key = f"proc_{pname}_gb"
                     self.trend_tracker.update(metric_key, rss_gb, slope_threshold=1.0)  # 1GB/hr
                     if rss_gb > 10:  # >10GB single process
                         await self.bus.publish(SystemEvent(
@@ -511,7 +506,6 @@ class Application:
             self.ringlog.sync_now()
 
     _LLM_MAX_PER_MINUTE = 10
-    _llm_call_times: list[float] = []
 
     async def _classify_log_event(self, event: SystemEvent) -> None:
         """Bus subscriber (LOG_ANOMALY only): fire-and-forget classification.

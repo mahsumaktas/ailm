@@ -290,9 +290,6 @@ class HwmonSource(PollingSource):
         if self._prev_diskstats is not None and self._prev_time > 0:
             dt = now - self._prev_time
             if dt > 0:
-                # Calculate IOPS and throughput
-                read_iops = (stats["reads"] - self._prev_diskstats["reads"]) / dt
-                write_iops = (stats["writes"] - self._prev_diskstats["writes"]) / dt
                 # Sectors are 512 bytes
                 read_mbs = (stats["read_sectors"] - self._prev_diskstats["read_sectors"]) * 512 / dt / 1_000_000
                 write_mbs = (stats["write_sectors"] - self._prev_diskstats["write_sectors"]) * 512 / dt / 1_000_000

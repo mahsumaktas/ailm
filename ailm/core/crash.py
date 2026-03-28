@@ -107,9 +107,9 @@ class CrashDetector:
         if not lines:
             return "Previous session crashed (no ring log available for analysis)"
 
-        critical_count = sum(1 for l in lines if _CRITICAL_RE.search(l))
-        oom_match = any(_OOM_RE.search(l) for l in lines)
-        panic_match = any(_PANIC_RE.search(l) for l in lines)
+        critical_count = sum(1 for line in lines if _CRITICAL_RE.search(line))
+        oom_match = any(_OOM_RE.search(line) for line in lines)
+        panic_match = any(_PANIC_RE.search(line) for line in lines)
 
         # Find last source
         last_line = lines[-1] if lines else ""

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ailm.core.bus import EventBus
-from ailm.core.dedup import DedupAction, DedupDecision, EventDedup, fingerprint
+from ailm.core.dedup import DedupAction, EventDedup, fingerprint
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import cancel_task
 

@@ -59,11 +59,16 @@ class SysHealthSource(PollingSource):
         if taint > 0 and not self._taint_warned:
             self._taint_warned = True
             flags = []
-            if taint & (1 << 0): flags.append("proprietary_module")
-            if taint & (1 << 12): flags.append("unsigned_module")
-            if taint & (1 << 13): flags.append("soft_lockup")
-            if taint & (1 << 9): flags.append("kernel_warning")
-            if taint & (1 << 14): flags.append("firmware_workaround")
+            if taint & (1 << 0):
+                flags.append("proprietary_module")
+            if taint & (1 << 12):
+                flags.append("unsigned_module")
+            if taint & (1 << 13):
+                flags.append("soft_lockup")
+            if taint & (1 << 9):
+                flags.append("kernel_warning")
+            if taint & (1 << 14):
+                flags.append("firmware_workaround")
             await self.bus.publish(SystemEvent(
                 type=EventType.SYSTEM_METRIC, severity=Severity.INFO,
                 raw_data=f"taint={taint} flags={','.join(flags)}",

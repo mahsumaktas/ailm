@@ -33,12 +33,12 @@ class OrphanSource(PollingSource):
         except (OSError, asyncio.TimeoutError):
             return
 
-        lines = [l.strip() for l in stdout.decode().splitlines() if l.strip()]
+        lines = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
         count = len(lines)
 
         if self._last_count is not None and count > self._last_count:
             new = count - self._last_count
-            sample = ", ".join(l.split()[0] for l in lines[:5])
+            sample = ", ".join(line.split()[0] for line in lines[:5])
             await self.bus.publish(SystemEvent(
                 type=EventType.SYSTEM_METRIC, severity=Severity.INFO,
                 raw_data=f"orphan_count={count} new={new} packages={sample}",
