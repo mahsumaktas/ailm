@@ -22,6 +22,7 @@ class SourcesConfig(BaseModel):
     disk_warn_pct: int = Field(default=80, ge=1, le=100)
     disk_critical_pct: int = Field(default=95, ge=1, le=100)
     service_interval: int = Field(default=300, gt=0)
+    disk_slope_threshold: float = Field(default=0.5, gt=0.0)  # %/hour for trend alert
 
     @model_validator(mode="after")
     def warn_less_than_critical(self) -> "SourcesConfig":
@@ -45,6 +46,8 @@ class DedupConfig(BaseModel):
     window_seconds: int = Field(default=60, gt=0)
     baseline_seconds: int = Field(default=300, gt=0)
     max_per_source_per_minute: int = Field(default=20, gt=0)
+    aggregate_threshold: int = Field(default=5, gt=0)
+    aggregate_window_seconds: int = Field(default=60, gt=0)
 
 
 class TrendConfig(BaseModel):
@@ -52,6 +55,7 @@ class TrendConfig(BaseModel):
 
     alpha: float = Field(default=0.1, gt=0.0, lt=1.0)
     window_size: int = Field(default=60, gt=10)
+    fast_window_size: int = Field(default=20, gt=4)  # for health_job 30s polling
     cooldown_seconds: int = Field(default=600, gt=0)
 
 

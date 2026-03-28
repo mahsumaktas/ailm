@@ -19,6 +19,7 @@ class DiskMonitor(PollingSource):
         interval: int,
         path: str = "/",
         trend_tracker: TrendTracker | None = None,
+        slope_threshold: float = 0.5,
     ) -> None:
         super().__init__(interval)
         self._warn_pct = warn_pct
@@ -26,6 +27,7 @@ class DiskMonitor(PollingSource):
         self._path = path
         self._last_severity: Severity | None = None
         self._trend = trend_tracker
+        self._slope_threshold = slope_threshold
 
     async def check(self) -> None:
         """Inspect disk usage and publish a new alert when severity changes."""
@@ -35,7 +37,7 @@ class DiskMonitor(PollingSource):
         # Trend tracking (always, regardless of threshold)
         if self._trend is not None:
             alert = self._trend.update(
-                "disk_usage_pct", pct, slope_threshold=2.0,  # 2%/hour
+                "disk_usage_pct", pct, slope_threshold=self._slope_threshold,
             )
             if alert is not None:
                 await self.bus.publish(SystemEvent(

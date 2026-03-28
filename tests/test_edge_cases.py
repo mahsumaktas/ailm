@@ -479,7 +479,7 @@ class TestCliEntryPointEdgeCases:
             cli.main()
 
         assert exc.value.code == 0
-        assert "0.1.0-dev" in capsys.readouterr().out
+        assert "0.2.0-dev" in capsys.readouterr().out
 
 
 class TestSystemdInitEdgeCases:

@@ -46,7 +46,7 @@ class Application:
         self.scheduler: SchedulerEngine | None = None
         self.trend_tracker = TrendTracker(
             alpha=config.trend.alpha,
-            window_size=config.trend.window_size,
+            window_size=config.trend.fast_window_size,
             cooldown_seconds=config.trend.cooldown_seconds,
         )
         self.sources: list[Source] = []
@@ -185,6 +185,7 @@ class Application:
             DiskMonitor(
                 cfg.disk_warn_pct, cfg.disk_critical_pct, cfg.disk_interval,
                 trend_tracker=self.trend_tracker,
+                slope_threshold=cfg.disk_slope_threshold,
             )
         )
         self.sources.append(ServiceMonitor(interval=cfg.service_interval))
@@ -225,10 +226,28 @@ class Application:
 
         await self.scheduler.add_cron_job(cleanup_job, "0 3 * * *", job_id="db_cleanup")
 
-        # Periodic health + status prune + queue drain (every 30s)
+        # Periodic health + status prune + queue drain + trend sampling (every 30s)
         async def health_job() -> None:
-            # Prune stale events from status tracker (prevents stuck red/orange)
             self.status_tracker.prune()
+
+            # Fast-poll disk trend (30s intervals → full window in 10min with window_size=20)
+            try:
+                import psutil
+                pct = psutil.disk_usage("/").percent
+                alert = self.trend_tracker.update(
+                    "disk_usage_pct", pct,
+                    slope_threshold=self.config.sources.disk_slope_threshold,
+                )
+                if alert is not None:
+                    await self.bus.publish(SystemEvent(
+                        type=EventType.TREND_ALERT,
+                        severity=Severity.WARNING,
+                        raw_data=f"metric={alert.metric} slope={alert.slope:.3f} ema={alert.ema:.1f}",
+                        source="trend",
+                        summary=alert.summary,
+                    ))
+            except Exception:
+                pass  # psutil failure should not break health check
 
             if self.llm is not None:
                 was_available = self.llm.available
@@ -350,36 +369,47 @@ class Application:
             self.ringlog.sync_now()
 
     async def _classify_log_event(self, event: SystemEvent) -> None:
-        """Bus subscriber (LOG_ANOMALY only): classify via LLM or queue."""
+        """Bus subscriber (LOG_ANOMALY only): fire-and-forget classification.
+
+        Spawns a background task so bus dispatch is not blocked by LLM latency.
+        """
         if event.summary is not None:
-            return  # already classified
+            return
+        if self.llm is None:
+            return
+        import asyncio
+        asyncio.create_task(self._do_classify(event))
 
-        if self.llm is not None and self.llm.available:
-            result = await self.llm.classify_log(event.raw_data)
-            if result is not None:
-                event.summary = result.get("summary", event.raw_data[:120])
-                if event.id is not None and self.repo is not None:
-                    await self.repo.update_summary(event.id, event.summary)
-                return
+    async def _do_classify(self, event: SystemEvent) -> None:
+        """Background classification task — runs after bus dispatch completes."""
+        try:
+            if self.llm is not None and self.llm.available:
+                result = await self.llm.classify_log(event.raw_data)
+                if result is not None:
+                    summary = result.get("summary", event.raw_data[:120])
+                    event.summary = summary
+                    # event.id is set by _persist_event (runs before this task completes)
+                    if event.id is not None and self.repo is not None:
+                        await self.repo.update_summary(event.id, summary)
+                    return
 
-        # LLM unavailable — queue for later with callback to update DB
-        if self.llm is not None:
+            # LLM unavailable — queue for later
             from ailm.llm.prompts import CLASSIFICATION_SYSTEM, build_classification_prompt
 
-            async def on_classified(result: str) -> None:
-                """Called when queued classification completes."""
+            async def on_classified(result_str: str) -> None:
                 try:
                     import json
-                    parsed = json.loads(result)
-                    summary = parsed.get("summary", result[:120])
+                    parsed = json.loads(result_str)
+                    summary = parsed.get("summary", result_str[:120])
                 except (json.JSONDecodeError, AttributeError):
-                    summary = result[:120]
+                    summary = result_str[:120]
                 if event.id is not None and self.repo is not None:
                     await self.repo.update_summary(event.id, summary)
-                    logger.debug("Backfilled classification for event %d", event.id)
 
             self.llm_queue.enqueue(LLMTask(
                 prompt=build_classification_prompt(event.raw_data),
                 system=CLASSIFICATION_SYSTEM,
                 callback=on_classified,
             ))
+        except Exception:
+            logger.debug("Classification failed for event %s", event.id)

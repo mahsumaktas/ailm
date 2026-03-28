@@ -86,7 +86,7 @@ class TestShouldPublish:
     @patch("ailm.core.dedup.time.monotonic")
     def test_baseline_forces_emit(self, mock_time):
         mock_time.return_value = 0.0
-        dedup = EventDedup(DedupConfig(window_seconds=10, baseline_seconds=60))
+        dedup = EventDedup(DedupConfig(window_seconds=10, baseline_seconds=60, aggregate_threshold=999))
         dedup.should_publish("fp1", "src")
 
         # 50 repeats within window

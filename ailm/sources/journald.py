@@ -8,12 +8,13 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ailm.core.bus import EventBus
-from ailm.core.dedup import DedupAction, EventDedup, fingerprint
+from ailm.core.dedup import DedupAction, DedupDecision, EventDedup, fingerprint
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import cancel_task
 
@@ -88,11 +89,14 @@ class JournaldSource:
         self,
         batch_seconds: float = BATCH_SECONDS,
         dedup: EventDedup | None = None,
+        startup_grace_seconds: float = 10.0,
     ) -> None:
         if batch_seconds <= 0:
             raise ValueError("batch_seconds must be positive")
         self._batch_seconds = batch_seconds
         self._dedup = dedup
+        self._startup_grace = startup_grace_seconds
+        self._start_time: float = 0.0
         self._bus: EventBus | None = None
         self._buffer: deque[JournalEntry] = deque(maxlen=BUFFER_MAXLEN)
         self._reader_task: asyncio.Task[None] | None = None
@@ -113,6 +117,7 @@ class JournaldSource:
             return
 
         self._bus = bus
+        self._start_time = time.monotonic()
         self._stop_event.clear()
         self._reader_task = asyncio.create_task(self._run_reader())
         self._batcher_task = asyncio.create_task(self._run_batcher())
@@ -188,20 +193,32 @@ class JournaldSource:
             except IndexError:
                 break  # reader thread drained it simultaneously
 
+        # Startup grace: only emit CRITICAL during first N seconds
+        in_grace = time.monotonic() - self._start_time < self._startup_grace
+        if in_grace:
+            entries = [e for e in entries if e.priority <= 2]  # EMERG/ALERT/CRIT only
+
         published = 0
         suppressed = 0
         for i, entry in enumerate(entries):
             # Dedup: fingerprint and decide
             if self._dedup is not None:
                 fp = fingerprint(self.name, entry.unit, entry.message)
-                decision = self._dedup.should_publish(fp, self.name)
+                decision = self._dedup.should_publish(fp, self.name, entry.message)
                 if decision.action == DedupAction.SUPPRESS:
                     suppressed += 1
                     continue
-                # Baseline emit: annotate with suppressed count
-                raw = f"unit={entry.unit} priority={entry.priority} msg={entry.message}"
-                if decision.suppressed_count > 0:
-                    raw += f" [+{decision.suppressed_count} suppressed]"
+                if decision.action == DedupAction.AGGREGATE:
+                    if decision.aggregate_summary is not None:
+                        # Time for periodic aggregate — emit summary event
+                        raw = decision.aggregate_summary
+                    else:
+                        suppressed += 1
+                        continue  # suppress individual, no summary yet
+                else:
+                    raw = f"unit={entry.unit} priority={entry.priority} msg={entry.message}"
+                    if decision.suppressed_count > 0:
+                        raw += f" [+{decision.suppressed_count} suppressed]"
             else:
                 raw = f"unit={entry.unit} priority={entry.priority} msg={entry.message}"
 
