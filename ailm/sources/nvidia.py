@@ -14,7 +14,7 @@ from ailm.sources.base import PollingSource
 
 logger = logging.getLogger(__name__)
 
-_QUERY_FIELDS = "temperature.gpu,memory.used,memory.total,power.draw,pstate,clocks.gr,clocks.mem"
+_QUERY_FIELDS = "temperature.gpu,memory.used,memory.total,power.draw,pstate,clocks.gr,clocks.mem,fan.speed"
 _PCIE_FIELDS = "pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max"
 _VRAM_WARN_PCT = 90
 
@@ -85,7 +85,7 @@ class NvidiaSource(PollingSource):
             return
 
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 7:
+        if len(parts) < 8:
             return
 
         try:
@@ -94,6 +94,7 @@ class NvidiaSource(PollingSource):
             vram_total = float(parts[2])
             power = float(parts[3])
             pstate = parts[4]
+            fan_pct = int(parts[7].replace(" %", "").strip()) if parts[7].strip() not in ("[N/A]", "N/A", "") else 0
         except (ValueError, IndexError):
             return
 
@@ -102,6 +103,8 @@ class NvidiaSource(PollingSource):
         # Feed trends
         if self._trend is not None:
             self._trend.update("gpu_temp_c", temp, slope_threshold=5.0)
+            self._trend.update("gpu_fan_pct", float(fan_pct), slope_threshold=20.0)
+            self._trend.update("gpu_power_w", power, slope_threshold=30.0)
             alert = self._trend.update("gpu_vram_pct", vram_pct, slope_threshold=10.0)
             if alert is not None:
                 await self.bus.publish(SystemEvent(
