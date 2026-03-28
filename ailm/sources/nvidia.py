@@ -15,6 +15,7 @@ from ailm.sources.base import PollingSource
 logger = logging.getLogger(__name__)
 
 _QUERY_FIELDS = "temperature.gpu,memory.used,memory.total,power.draw,pstate,clocks.gr,clocks.mem"
+_PCIE_FIELDS = "pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max"
 _VRAM_WARN_PCT = 90
 
 
@@ -36,6 +37,8 @@ class NvidiaSource(PollingSource):
         self._trend = trend_tracker
         self._available = False
         self._last_vram_alert = False
+        self._pcie_warned = False
+        self._check_count = 0
 
     async def start(self, bus) -> None:
         self._available = await self._check_nvidia()
@@ -130,4 +133,43 @@ class NvidiaSource(PollingSource):
                 raw_data=f"gpu_temp={temp} power={power}W pstate={pstate}",
                 source=self.name,
                 summary=f"GPU temperature critical: {temp}C (power {power}W, {pstate})",
+            ))
+
+        # PCIe link degradation check (every 10th poll = ~5min)
+        self._check_count += 1
+        if self._check_count % 10 == 0:
+            await self._check_pcie()
+
+    async def _check_pcie(self) -> None:
+        """Check PCIe link width/gen for degradation."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                f"--query-gpu={_PCIE_FIELDS}",
+                "--format=csv,noheader",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except (OSError, asyncio.TimeoutError):
+            return
+
+        parts = [p.strip() for p in stdout.decode().strip().split(",")]
+        if len(parts) < 4:
+            return
+
+        try:
+            gen_cur, gen_max = int(parts[0]), int(parts[1])
+            width_cur, width_max = int(parts[2]), int(parts[3])
+        except ValueError:
+            return
+
+        if (gen_cur < gen_max or width_cur < width_max) and not self._pcie_warned:
+            self._pcie_warned = True
+            await self.bus.publish(SystemEvent(
+                type=EventType.SYSTEM_METRIC,
+                severity=Severity.WARNING,
+                raw_data=f"pcie_gen={gen_cur}/{gen_max} pcie_width=x{width_cur}/x{width_max}",
+                source=self.name,
+                summary=f"GPU PCIe degraded: Gen{gen_cur} x{width_cur} (max Gen{gen_max} x{width_max})",
             ))

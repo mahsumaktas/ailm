@@ -100,7 +100,12 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 | Tailscale mesh monitoring (peer online/offline) | ✅ |
 | Security CVE scanning (arch-audit, daily) | ✅ |
 | Snapshot count warning (configurable threshold) | ✅ |
-| SSH brute-force detection (journald prefilter) | ✅ |
+| SSH/GPU brute-force detection (journald prefilter) | ✅ |
+| PCIe link degradation detection (gen/width check) | ✅ |
+| Sunshine service + port monitoring (22, 11434, 47984) | ✅ |
+| Disk time-to-full projection from trend slope | ✅ |
+| Event frequency trend tracking | ✅ |
+| Orphan package detection (pacman -Qtd, daily) | ✅ |
 
 ### Planned
 

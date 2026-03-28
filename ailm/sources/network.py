@@ -1,13 +1,13 @@
-"""Tailscale mesh network health monitoring.
+"""Network health monitoring — Tailscale peers, services, ports.
 
-Uses 'tailscale status --json' via create_subprocess_exec
-with fixed arguments. No shell, no user input.
-Gracefully disabled when tailscale is not available.
+Uses create_subprocess_exec and socket for all checks.
+No shell invocation, no user input interpolation.
 """
 
 import asyncio
 import json
 import logging
+import socket
 
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import PollingSource
@@ -100,3 +100,75 @@ class TailscaleSource(PollingSource):
                 ))
 
         self._known_peers = current
+
+
+class ServicePortSource(PollingSource):
+    """Monitor user services and local ports. Fixed args only."""
+
+    name = "netcheck"
+
+    def __init__(
+        self,
+        interval: int = 60,
+        services: list[tuple[str, bool]] | None = None,
+        ports: list[tuple[int, str]] | None = None,
+    ) -> None:
+        super().__init__(interval)
+        self._services = services or [("sunshine", True)]
+        self._ports = ports or [
+            (22, "sshd"), (11434, "ollama"), (47984, "sunshine-https"),
+        ]
+        self._service_state: dict[str, bool] = {}
+        self._port_state: dict[int, bool] = {}
+
+    async def check(self) -> None:
+        for unit, is_user in self._services:
+            active = await self._is_active(unit, is_user)
+            was = self._service_state.get(unit)
+            if was is not None and was and not active:
+                await self.bus.publish(SystemEvent(
+                    type=EventType.SERVICE_FAIL, severity=Severity.WARNING,
+                    raw_data=f"service={unit} active=false user={is_user}",
+                    source=self.name, summary=f"{unit}.service went down",
+                ))
+            elif was is not None and not was and active:
+                await self.bus.publish(SystemEvent(
+                    type=EventType.SYSTEM_METRIC, severity=Severity.INFO,
+                    raw_data=f"service={unit} active=true",
+                    source=self.name, summary=f"{unit}.service recovered",
+                ))
+            self._service_state[unit] = active
+
+        for port, label in self._ports:
+            up = await asyncio.to_thread(self._check_port, port)
+            was = self._port_state.get(port)
+            if was is not None and was and not up:
+                await self.bus.publish(SystemEvent(
+                    type=EventType.SYSTEM_METRIC, severity=Severity.WARNING,
+                    raw_data=f"port={port} label={label} reachable=false",
+                    source=self.name, summary=f"Port {port} ({label}) unreachable",
+                ))
+            self._port_state[port] = up
+
+    async def _is_active(self, unit: str, is_user: bool) -> bool:
+        """Check systemd service (hardcoded args, safe)."""
+        try:
+            args = ["systemctl"]
+            if is_user:
+                args.append("--user")
+            args.extend(["is-active", unit])
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            return stdout.decode().strip() == "active"
+        except (OSError, asyncio.TimeoutError):
+            return False
+
+    @staticmethod
+    def _check_port(port: int, host: str = "127.0.0.1") -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except (OSError, ConnectionRefusedError):
+            return False

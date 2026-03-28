@@ -20,8 +20,9 @@ from ailm.scheduler import SchedulerEngine, generate_morning_briefing
 from ailm.sources.base import Source
 from ailm.sources.disk import DiskMonitor
 from ailm.sources.docker import DockerSource
-from ailm.sources.network import TailscaleSource
+from ailm.sources.network import ServicePortSource, TailscaleSource
 from ailm.sources.nvidia import NvidiaSource
+from ailm.sources.orphan import OrphanSource
 from ailm.sources.security import SecuritySource
 from ailm.sources.smart import SmartSource
 from ailm.sources.journald import JournaldSource
@@ -205,7 +206,9 @@ class Application:
         self.sources.append(NvidiaSource(interval=30, trend_tracker=self.trend_tracker))
         self.sources.append(SmartSource())
         self.sources.append(TailscaleSource())
+        self.sources.append(ServicePortSource())
         self.sources.append(SecuritySource())
+        self.sources.append(OrphanSource())
 
         if cfg.journald_enabled:
             dedup_cfg = self.config.dedup
@@ -303,13 +306,31 @@ class Application:
                         continue
                     alert = self.trend_tracker.update(name, value, slope_threshold=threshold)
                     if alert is not None:
+                        summary = alert.summary
+                        # Disk time-to-full projection
+                        if name == "disk_usage_pct" and alert.slope > 0:
+                            remaining = 100.0 - alert.current_value
+                            hours_to_full = remaining / alert.slope
+                            if hours_to_full < 72:
+                                days = hours_to_full / 24
+                                summary += f" — projected full in {days:.1f} days"
                         await self.bus.publish(SystemEvent(
                             type=EventType.TREND_ALERT,
                             severity=Severity.WARNING,
                             raw_data=f"metric={alert.metric} slope={alert.slope:.3f} ema={alert.ema:.1f} current={alert.current_value:.1f}",
                             source="trend",
-                            summary=alert.summary,
+                            summary=summary,
                         ))
+
+                # Event frequency tracking
+                if self.repo is not None:
+                    from datetime import datetime, timedelta, timezone
+                    one_hr_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+                    counts = await self.repo.get_event_count_by_type(one_hr_ago)
+                    total_per_hr = sum(counts.values())
+                    self.trend_tracker.update(
+                        "events_per_hour", float(total_per_hr), slope_threshold=100.0,
+                    )
             except Exception:
                 pass  # psutil failure should not break health check
 

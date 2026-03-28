@@ -33,7 +33,7 @@ PREFILTER_RE = re.compile(
     r"coredump|timeout|refused|unreachable|dropped|degraded|"
     r"emergency|alert|fatal|abort|corrupt|"
     r"invalid user|authentication failure|ban |unban |"
-    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error)"
+    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock)"
 )
 
 BATCH_SECONDS = 5
