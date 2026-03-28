@@ -170,6 +170,12 @@ class JournaldSource:
                             continue
                         if self._noise_re is not None and self._noise_re.search(msg):
                             continue
+                        # Skip ailm's own log messages (self-classification loop)
+                        if entry.get("_SYSTEMD_USER_UNIT", "") == "ailm.service":
+                            continue
+                        if entry.get("SYSLOG_IDENTIFIER", "") in ("ailm", "python"):
+                            if "ailm" in msg[:50]:
+                                continue
 
                         ts = entry.get("__REALTIME_TIMESTAMP")
                         if ts is None:

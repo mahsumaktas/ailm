@@ -500,8 +500,11 @@ class Application:
         from ailm.core.dedup import summary_fingerprint
         from ailm.core.models import Severity, severity_max
 
-        # Summary + hash for post-LLM dedup
+        # Summary + root cause (append if present)
         summary = result.get("summary", event.raw_data[:120])
+        root_cause = result.get("root_cause", "")
+        if root_cause and len(summary) + len(root_cause) < 200:
+            summary = f"{summary} — {root_cause}"
         event.summary = summary
         event.summary_hash = summary_fingerprint(summary)
 
@@ -512,9 +515,11 @@ class Application:
             if upgraded != event.severity:
                 event.severity = upgraded
 
-        # Action
+        # Action (with noise override)
         action = result.get("action", "").lower()
-        if action in self._VALID_ACTIONS:
+        if action == "ignore":
+            event.user_action = None  # don't store "ignore" as action
+        elif action in self._VALID_ACTIONS:
             event.user_action = action
 
         # Persist to DB
