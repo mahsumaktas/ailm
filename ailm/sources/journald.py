@@ -27,13 +27,52 @@ try:
 except ImportError:
     HAS_SYSTEMD = False
 
-# Leading \b ensures word start; no trailing \b so "fail" matches "failed", "failure" etc.
+# Comprehensive prefilter — catch every meaningful system event.
+# Grouped by category for maintainability.
 PREFILTER_RE = re.compile(
-    r"(?i)\b(error|critical|fail|denied|oom|segfault|killed|panic|"
-    r"coredump|timeout|refused|unreachable|dropped|degraded|"
-    r"emergency|alert|fatal|abort|corrupt|"
-    r"invalid user|authentication failure|ban |unban |"
-    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock)"
+    r"(?i)\b("
+    # Core errors
+    r"error|critical|fail|denied|panic|fatal|abort|corrupt|"
+    r"emergency|alert|warning|degraded|"
+    # Process/memory
+    r"oom|segfault|killed|coredump|core dump|"
+    r"out of memory|cannot allocate|memory pressure|"
+    # Network/auth
+    r"timeout|refused|unreachable|dropped|"
+    r"invalid user|authentication fail|permission denied|"
+    r"ban |unban |brute.force|unauthorized|"
+    r"connection reset|connection closed|handshake|certificate|"
+    # GPU/hardware
+    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock|"
+    r"hardware error|machine check|thermal|overheat|throttl|"
+    # Disk/filesystem
+    r"I/O error|read.only|remount|filesystem|fsck|"
+    r"BTRFS|EXT4.*error|XFS.*error|"
+    r"no space left|disk full|quota|"
+    # Systemd lifecycle
+    r"start-limit|restart|activated|deactivated|"
+    r"entered failed|main process exited|"
+    r"service.*stopped|unit.*failed|"
+    # USB/bluetooth/audio
+    r"usb.*disconnect|usb.*reset|usb.*overcurrent|"
+    r"bluetooth.*fail|bluetooth.*error|btusb|"
+    r"pipewire.*error|pulseaudio.*fail|alsa.*error|"
+    # Session/login
+    r"session opened|session closed|login|logout|"
+    r"pam_unix|new seat|removed seat|lid |suspend|resume|hibernate|"
+    # Firewall
+    r"iptables|nftables|DROP|REJECT|firewall|"
+    # Kernel modules
+    r"module.*load|insmod|modprobe|module.*fail|"
+    # Wayland/display
+    r"compositor|wayland.*error|wlroots|kwin.*crash|plasmashell|"
+    # Cron/scheduled
+    r"cron\[|anacron|systemd-tmpfiles|logrotate|"
+    # Package/update
+    r"pacman|ALPM|upgrade|downgrad|"
+    # Snapper/snapshot
+    r"snapper|snapshot.*creat|snapshot.*delet"
+    r")"
 )
 
 BATCH_SECONDS = 5

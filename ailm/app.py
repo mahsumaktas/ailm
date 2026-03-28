@@ -20,9 +20,11 @@ from ailm.scheduler import SchedulerEngine, generate_morning_briefing
 from ailm.sources.base import Source
 from ailm.sources.disk import DiskMonitor
 from ailm.sources.docker import DockerSource
+from ailm.sources.hwmon import HwmonSource
 from ailm.sources.network import ServicePortSource, TailscaleSource
 from ailm.sources.nvidia import NvidiaSource
 from ailm.sources.orphan import OrphanSource
+from ailm.sources.pressure import PressureSource
 from ailm.sources.security import SecuritySource
 from ailm.sources.smart import SmartSource
 from ailm.sources.journald import JournaldSource
@@ -209,6 +211,8 @@ class Application:
         self.sources.append(ServicePortSource())
         self.sources.append(SecuritySource())
         self.sources.append(OrphanSource())
+        self.sources.append(PressureSource(interval=30, trend_tracker=self.trend_tracker))
+        self.sources.append(HwmonSource(interval=30, trend_tracker=self.trend_tracker))
 
         if cfg.journald_enabled:
             dedup_cfg = self.config.dedup

@@ -308,8 +308,8 @@ class TestSourceRegistration:
         app = Application(app_config)
         app._register_sources()
         # disk, services, pacman, reboot, pacnew, docker, nvidia, smart,
-        # tailscale, netcheck, security, orphan = 12
-        assert len(app.sources) == 12
+        # tailscale, netcheck, security, orphan, pressure, hwmon = 14
+        assert len(app.sources) == 14
 
     def test_source_count_all(self, app_config_snapshots):
         """With snapshots dir and journald."""
@@ -318,8 +318,8 @@ class TestSourceRegistration:
         app_config_snapshots.sources.journald_enabled = True
         app = Application(app_config_snapshots)
         app._register_sources()
-        # +snapshot +journald = 14
-        assert len(app.sources) == 14
+        # +snapshot +journald = 16
+        assert len(app.sources) == 16
 
 
 # ---------------------------------------------------------------------------
