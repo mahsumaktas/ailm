@@ -25,6 +25,7 @@ from ailm.sources.network import ServicePortSource, TailscaleSource
 from ailm.sources.nvidia import NvidiaSource
 from ailm.sources.orphan import OrphanSource
 from ailm.sources.pressure import PressureSource
+from ailm.sources.syshealth import SysHealthSource
 from ailm.sources.security import SecuritySource
 from ailm.sources.smart import SmartSource
 from ailm.sources.journald import JournaldSource
@@ -213,6 +214,10 @@ class Application:
         self.sources.append(OrphanSource())
         self.sources.append(PressureSource(interval=30, trend_tracker=self.trend_tracker))
         self.sources.append(HwmonSource(interval=30, trend_tracker=self.trend_tracker))
+        self.sources.append(SysHealthSource(interval=60, trend_tracker=self.trend_tracker))
+        # Second NVMe if present
+        if Path("/dev/nvme1").exists():
+            self.sources.append(SmartSource(device="/dev/nvme1"))
 
         if cfg.journald_enabled:
             dedup_cfg = self.config.dedup
