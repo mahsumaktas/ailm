@@ -6,6 +6,7 @@
     <img src="https://img.shields.io/badge/platform-Linux-blue" />
     <img src="https://img.shields.io/badge/LLM-local--first-green" />
     <img src="https://img.shields.io/badge/license-MIT-lightgrey" />
+    <img src="https://img.shields.io/badge/sources-20-brightgreen" />
     <img src="https://img.shields.io/badge/tests-528%20passing-brightgreen" />
     <img src="https://img.shields.io/badge/python-%3E%3D3.12-blue" />
   </p>
@@ -106,6 +107,17 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 | Disk time-to-full projection from trend slope | ✅ |
 | Event frequency trend tracking | ✅ |
 | Orphan package detection (pacman -Qtd, daily) | ✅ |
+| HWiNFO-level sensors (all temps, voltages, fans, CPU freq/power) | ✅ |
+| PSI pressure monitoring (CPU/memory/IO stall) | ✅ |
+| Disk I/O latency + throughput (/proc/diskstats) | ✅ |
+| Kernel state (taint flags, fd exhaustion, zram, conntrack) | ✅ |
+| Btrfs filesystem health (device stats, corruption, usage) | ✅ |
+| Coredump detection (SIGSEGV/SIGABRT crash tracking) | ✅ |
+| Kernel message bypass (OOM, panic, Xid — no filter, 0.5s flush) | ✅ |
+| Per-process memory tracking (>10GB alert, leak detection) | ✅ |
+| RAM/swap OOM projection ("OOM in 23 minutes") | ✅ |
+| Context-aware LLM (Jazari-4B, root cause, action suggestions) | ✅ |
+| 80+ journald patterns (earlyoom, DKMS, DNS, thunderbolt, etc.) | ✅ |
 
 ### Planned
 
@@ -134,15 +146,16 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 │                   EventBus                        │
 │     publish ← Sources    subscribe → DB, Hooks    │
 ├──────────────────────────────────────────────────┤
-│  Sources          │  Consumers       │  Services  │
-│  · DiskMonitor    │  · DB persist    │  · Ollama  │
-│  · ServiceMonitor │  · StatusTracker │  · Sched.  │
-│  · PacmanSource   │  · HookManager  │  · Actions  │
-│  · SnapshotSource │  · LLM classify │  · Dedup   │
-│  · RebootSource   │  · RingBufferLog│  · Trend   │
-│  · JournaldSource │  · CrashDetect  │  · Noise   │
-│  · PacnewSource   │  · ActionDetect │            │
-│  · DockerSource   │                  │            │
+│  20 Sources       │  Consumers       │  Services  │
+│  · Journald (80+) │  · DB persist    │  · Ollama  │
+│  · NVIDIA GPU     │  · StatusTracker │  · Sched.  │
+│  · HWmon sensors  │  · HookManager  │  · Dedup   │
+│  · PSI pressure   │  · LLM classify │  · Trend   │
+│  · Btrfs health   │  · RingBufferLog│  · Noise   │
+│  · Coredump       │  · CrashDetect  │  · OOM     │
+│  · Docker/Tailsc. │  · ProcessTrack │  · Predict  │
+│  · SMART/Disk I/O │  · ActionDetect │            │
+│  · CVE/Orphan/... │                  │            │
 ├──────────────────────────────────────────────────┤
 │                 SQLite WAL + Ollama               │
 └──────────────────────────────────────────────────┘
@@ -153,7 +166,7 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 | Layer | Choice | Reason |
 |---|---|---|
 | UI | PySide6 (Qt6) | Best Wayland/KDE Plasma 6 support |
-| LLM | Ollama (local) | Private, offline, configurable model |
+| LLM | Ollama + Jazari-4B | Private, offline, 1.2s/event, root cause analysis |
 | Event bus | asyncio pub/sub | Zero dependency, backpressure |
 | Database | SQLite WAL | Embedded, fast, proven |
 | File watching | watchdog (inotify) | Event-driven, debounced |
@@ -175,14 +188,16 @@ pip install -e ".[dev]"
 # Install system dependency (Arch/CachyOS)
 sudo pacman -S python-systemd
 
-# Pull an LLM model
-ollama pull qwen3.5:9b
+# Pull an LLM model (Jazari recommended, or any Ollama model)
+ollama pull jazari-4b-sft       # 4.5 GB, fastest, 100% JSON
+# or: ollama pull qwen3.5:9b   # 6.6 GB, general purpose
+# or: ollama pull gpt-oss:20b  # 13 GB, highest quality
 
 # Configure (optional — defaults work out of the box)
 mkdir -p ~/.config/ailm
 cat > ~/.config/ailm/config.toml << 'EOF'
 [llm]
-model = "qwen3.5:9b"
+model = "jazari-4b-sft"
 EOF
 
 # Run headless
@@ -203,11 +218,12 @@ ailm is designed to be invisible:
 
 | Metric | Value |
 |---|---|
-| CPU (idle) | ~0% (event-driven, not polling) |
-| RAM | ~35-40 MB |
-| Disk checks | Every 60s (configurable) |
-| LLM calls | Only for classification + daily briefing |
-| VRAM | 0 (model loaded by Ollama on demand) |
+| CPU (idle) | ~0.3% (20 sources, 30s poll cycle) |
+| RAM | ~80 MB |
+| VRAM | ~2.7 GB (Jazari-4B via Ollama) |
+| Sources | 20 active, polling 0.5s-86400s intervals |
+| LLM calls | log classification + daily briefing |
+| Disk | ~50 MB ringlog + ~5 MB rotating logs |
 
 ## Supported Distributions
 
