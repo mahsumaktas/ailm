@@ -24,6 +24,8 @@ def _check_kernel_mismatch() -> str | None:
 
 
 class RebootSource(PollingSource):
+    """Poll reboot-required signals and emit warnings when a reboot is needed."""
+
     name = "reboot"
 
     def __init__(self, interval: int = 300,
@@ -33,6 +35,7 @@ class RebootSource(PollingSource):
         self._was_required = False
 
     async def check(self) -> None:
+        """Publish a reboot-required event when the requirement first appears."""
         # Check 1: sentinel file (Debian/Ubuntu convention, cachyos-reboot-required)
         sentinel_exists = self._sentinel.exists()
 

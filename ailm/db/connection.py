@@ -1,9 +1,11 @@
-"""Async SQLite connection manager with WAL mode."""
+"""Async-compatible SQLite connection manager with WAL mode."""
 
+import asyncio
 import logging
+import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
-
-import aiosqlite
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -11,28 +13,82 @@ SCHEMA_VERSION = 1
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
-class Database:
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        self._conn: aiosqlite.Connection | None = None
+class _AsyncSQLiteConnection:
+    """Provide the subset of the ``aiosqlite`` API that ailm uses."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
 
     @property
-    def conn(self) -> aiosqlite.Connection:
+    def row_factory(self) -> type[sqlite3.Row] | None:
+        """Return the configured row factory."""
+        return self._connection.row_factory
+
+    @row_factory.setter
+    def row_factory(self, factory: type[sqlite3.Row] | None) -> None:
+        """Set the connection row factory."""
+        self._connection.row_factory = factory
+
+    async def execute(
+        self, sql: str, parameters: Iterable[Any] | None = None
+    ) -> sqlite3.Cursor:
+        """Execute a SQL statement in a worker thread."""
+        if parameters is None:
+            parameters = ()
+        return await asyncio.to_thread(self._connection.execute, sql, tuple(parameters))
+
+    async def execute_fetchall(
+        self, sql: str, parameters: Iterable[Any] | None = None
+    ) -> list[sqlite3.Row]:
+        """Execute a query and return all rows in a worker thread."""
+        if parameters is None:
+            parameters = ()
+        def _run():
+            return self._connection.execute(sql, tuple(parameters)).fetchall()
+        return await asyncio.to_thread(_run)
+
+    async def executescript(self, sql_script: str) -> sqlite3.Cursor:
+        """Execute a SQL script in a worker thread."""
+        return await asyncio.to_thread(self._connection.executescript, sql_script)
+
+    async def commit(self) -> None:
+        """Commit the current transaction in a worker thread."""
+        await asyncio.to_thread(self._connection.commit)
+
+    async def close(self) -> None:
+        """Close the underlying sqlite connection."""
+        self._connection.close()
+
+
+class Database:
+    """Manage application database lifecycle and schema initialization."""
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+        self._conn: _AsyncSQLiteConnection | None = None
+
+    @property
+    def conn(self) -> _AsyncSQLiteConnection:
+        """Return the active connection wrapper."""
         if self._conn is None:
             raise RuntimeError("Database not connected — call connect() first")
         return self._conn
 
     async def __aenter__(self) -> "Database":
+        """Open the database when entering an async context manager."""
         await self.connect()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        """Close the database when exiting an async context manager."""
         await self.close()
 
     async def connect(self) -> None:
+        """Open the database connection and ensure the schema exists."""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.db_path)
-        self._conn.row_factory = aiosqlite.Row
+        connection = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn = _AsyncSQLiteConnection(connection)
+        self._conn.row_factory = sqlite3.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
@@ -40,15 +96,16 @@ class Database:
         logger.info("Database connected: %s", self.db_path)
 
     async def close(self) -> None:
+        """Close the database if it is open."""
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
 
     async def _init_schema(self) -> None:
+        """Create the schema and seed the schema version row."""
         schema_sql = _SCHEMA_PATH.read_text()
         await self.conn.executescript(schema_sql)
 
-        # Ensure schema_version row exists
         row = await self.conn.execute_fetchall("SELECT version FROM schema_version")
         if not row:
             await self.conn.execute(

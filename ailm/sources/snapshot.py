@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 
 class SnapshotSource(WatchdogSource):
+    """Watch a snapper directory and emit events for new snapshots."""
+
     name = "snapshot"
 
     def __init__(self, snapshot_path: str) -> None:

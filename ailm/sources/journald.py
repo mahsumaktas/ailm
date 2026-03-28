@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ailm.core.bus import EventBus
+from ailm.core.dedup import DedupAction, EventDedup, fingerprint
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import cancel_task
 
@@ -50,29 +51,48 @@ _PRIORITY_MAP: dict[int, Severity] = {
 
 @dataclass
 class JournalEntry:
+    """Buffered journald entry waiting to be published as a system event."""
+
     message: str
     unit: str
     priority: int
     timestamp: datetime
 
+    def __repr__(self) -> str:
+        """Return a concise representation of the buffered entry."""
+        return (
+            "JournalEntry("
+            f"unit={self.unit!r}, "
+            f"priority={self.priority!r}, "
+            f"message={self.message!r}, "
+            f"timestamp={self.timestamp.isoformat()!r})"
+        )
+
 
 def priority_to_severity(priority: int) -> Severity:
+    """Map a journald numeric priority to the corresponding event severity."""
     return _PRIORITY_MAP.get(priority, Severity.INFO)
 
 
 def matches_prefilter(message: str) -> bool:
+    """Return whether a journal message is interesting enough to buffer."""
     return PREFILTER_RE.search(message) is not None
 
 
 class JournaldSource:
-    """Journald event source with regex pre-filter and batched dispatch."""
+    """Journald event source with regex pre-filter, dedup, and batched dispatch."""
 
     name = "journald"
 
-    def __init__(self, batch_seconds: float = BATCH_SECONDS) -> None:
+    def __init__(
+        self,
+        batch_seconds: float = BATCH_SECONDS,
+        dedup: EventDedup | None = None,
+    ) -> None:
         if batch_seconds <= 0:
             raise ValueError("batch_seconds must be positive")
         self._batch_seconds = batch_seconds
+        self._dedup = dedup
         self._bus: EventBus | None = None
         self._buffer: deque[JournalEntry] = deque(maxlen=BUFFER_MAXLEN)
         self._reader_task: asyncio.Task[None] | None = None
@@ -81,11 +101,13 @@ class JournaldSource:
 
     @property
     def bus(self) -> EventBus:
+        """Return the bound event bus or raise if the source is not started."""
         if self._bus is None:
             raise RuntimeError(f"Source '{self.name}' not started — call start() first")
         return self._bus
 
     async def start(self, bus: EventBus) -> None:
+        """Start background reader and batcher tasks when systemd support exists."""
         if not HAS_SYSTEMD:
             logger.warning("python-systemd not installed, journald source disabled")
             return
@@ -96,6 +118,7 @@ class JournaldSource:
         self._batcher_task = asyncio.create_task(self._run_batcher())
 
     async def stop(self) -> None:
+        """Stop reader and batcher tasks, then flush any buffered entries."""
         self._stop_event.set()
         await cancel_task(self._reader_task)
         self._reader_task = None
@@ -165,16 +188,41 @@ class JournaldSource:
             except IndexError:
                 break  # reader thread drained it simultaneously
 
+        published = 0
+        suppressed = 0
         for i, entry in enumerate(entries):
+            # Dedup: fingerprint and decide
+            if self._dedup is not None:
+                fp = fingerprint(self.name, entry.unit, entry.message)
+                decision = self._dedup.should_publish(fp, self.name)
+                if decision.action == DedupAction.SUPPRESS:
+                    suppressed += 1
+                    continue
+                # Baseline emit: annotate with suppressed count
+                raw = f"unit={entry.unit} priority={entry.priority} msg={entry.message}"
+                if decision.suppressed_count > 0:
+                    raw += f" [+{decision.suppressed_count} suppressed]"
+            else:
+                raw = f"unit={entry.unit} priority={entry.priority} msg={entry.message}"
+
             event = SystemEvent(
                 type=EventType.LOG_ANOMALY,
                 severity=priority_to_severity(entry.priority),
-                raw_data=f"unit={entry.unit} priority={entry.priority} msg={entry.message}",
+                raw_data=raw,
                 source=self.name,
                 summary=None,  # LLM classification fills this later
                 timestamp=entry.timestamp,
             )
             await self.bus.publish(event)
+            published += 1
             # Yield to event loop periodically — prevents bus queue overflow
-            if i % FLUSH_YIELD_EVERY == FLUSH_YIELD_EVERY - 1:
+            if published % FLUSH_YIELD_EVERY == FLUSH_YIELD_EVERY - 1:
                 await asyncio.sleep(0)
+
+        if entries:
+            logger.debug(
+                "Flush: %d entries, %d published, %d suppressed, %d tracked fps",
+                len(entries), published, suppressed,
+                self._dedup.tracked_count if self._dedup else 0,
+            )
+

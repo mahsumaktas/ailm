@@ -78,7 +78,7 @@ class TestSystemEvent:
 
 class TestEnums:
     def test_event_type_values(self):
-        assert len(EventType) == 8
+        assert len(EventType) == 11
         assert EventType.PACKAGE_UPDATE.value == "package_update"
         assert EventType.SERVICE_FAIL.value == "service_fail"
         assert EventType.DISK_ALERT.value == "disk_alert"

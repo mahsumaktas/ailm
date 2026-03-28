@@ -13,10 +13,13 @@ _EVENT_COLS = "id, timestamp, type, severity, summary, raw_data, source, user_ac
 
 
 class EventRepository:
+    """Read and write ``SystemEvent`` records in the SQLite database."""
+
     def __init__(self, db: Database) -> None:
         self.db = db
 
     async def insert_event(self, event: SystemEvent) -> int:
+        """Insert an event and update the in-memory object with its row id."""
         cursor = await self.db.conn.execute(
             """INSERT INTO events (timestamp, type, severity, summary, raw_data, source, user_action)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -38,6 +41,7 @@ class EventRepository:
         self, since: datetime, event_type: EventType | None = None,
         limit: int = 1000,
     ) -> list[SystemEvent]:
+        """Return events newer than ``since``, optionally filtered by type."""
         if event_type is not None:
             rows = await self.db.conn.execute_fetchall(
                 f"SELECT {_EVENT_COLS} FROM events WHERE timestamp >= ? AND type = ? ORDER BY timestamp LIMIT ?",
@@ -51,24 +55,28 @@ class EventRepository:
         return [e for r in rows if (e := self._row_to_event(r)) is not None]
 
     async def get_recent_events(self, limit: int = 50) -> list[SystemEvent]:
+        """Return the most recent events in reverse chronological order."""
         rows = await self.db.conn.execute_fetchall(
             f"SELECT {_EVENT_COLS} FROM events ORDER BY timestamp DESC LIMIT ?", (limit,)
         )
         return [e for r in rows if (e := self._row_to_event(r)) is not None]
 
     async def update_user_action(self, event_id: int, action: str) -> None:
+        """Persist the user action chosen for a stored event."""
         await self.db.conn.execute(
             "UPDATE events SET user_action = ? WHERE id = ?", (action, event_id)
         )
         await self.db.conn.commit()
 
     async def update_summary(self, event_id: int, summary: str) -> None:
+        """Update the generated summary for a stored event."""
         await self.db.conn.execute(
             "UPDATE events SET summary = ? WHERE id = ?", (summary, event_id)
         )
         await self.db.conn.commit()
 
     async def get_event_count_by_type(self, since: datetime) -> dict[str, int]:
+        """Return counts grouped by event type for rows newer than ``since``."""
         rows = await self.db.conn.execute_fetchall(
             "SELECT type, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY type",
             (since.isoformat(),),

@@ -23,17 +23,32 @@ type ResultCallback = Callable[[str], Coroutine[Any, Any, None]]
 
 @dataclass
 class LLMTask:
+    """Single deferred LLM request queued while the backend is unavailable."""
+
     prompt: str
     system: str | None = None
     created: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     callback: ResultCallback | None = None
 
+    def __repr__(self) -> str:
+        """Return a concise representation of the queued task."""
+        return (
+            "LLMTask("
+            f"prompt={self.prompt!r}, "
+            f"system={self.system!r}, "
+            f"created={self.created.isoformat()!r}, "
+            f"has_callback={self.callback is not None!r})"
+        )
+
 
 class LLMTaskQueue:
+    """Bounded queue that retries LLM work once the backend recovers."""
+
     def __init__(self, maxlen: int = MAX_QUEUE_SIZE) -> None:
         self._tasks: deque[LLMTask] = deque(maxlen=maxlen)
 
     def enqueue(self, task: LLMTask) -> None:
+        """Append a task to the queue, evicting the oldest when full."""
         self._tasks.append(task)
 
     async def drain(self, client: OllamaClient) -> int:
@@ -63,7 +78,9 @@ class LLMTaskQueue:
 
     @property
     def pending(self) -> int:
+        """Return the number of queued tasks."""
         return len(self._tasks)
 
     def clear(self) -> None:
+        """Drop every queued task."""
         self._tasks.clear()

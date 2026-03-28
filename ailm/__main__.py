@@ -24,6 +24,12 @@ async def run_headless(config) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop_event.set)
 
+    # SIGHUP → config reload without restart
+    loop.add_signal_handler(
+        signal.SIGHUP,
+        lambda: asyncio.ensure_future(app.reload_config()),
+    )
+
     try:
         await stop_event.wait()
     finally:
@@ -107,6 +113,7 @@ def run_with_ui(config) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments, load configuration, and launch the selected mode."""
     parser = argparse.ArgumentParser(
         prog="ailm",
         description="AI-powered Linux system companion",

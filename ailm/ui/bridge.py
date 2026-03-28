@@ -13,29 +13,17 @@ from concurrent.futures import Future
 
 from PySide6.QtCore import QThread, Signal
 
-from ailm.core.models import SystemEvent
-
 
 class AsyncioBridge(QThread):
-    """Background thread hosting an asyncio event loop.
-
-    Signals
-    -------
-    event_received : SystemEvent
-        Emitted when a new system event should be displayed in the feed.
-    status_changed : str
-        Emitted when overall system status changes (healthy/degraded/critical).
-    """
+    """Background thread hosting an asyncio event loop."""
 
     event_received = Signal(object)   # SystemEvent -> UI
     status_changed = Signal(str)      # SystemStatus value -> tray icon
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
+        """Initialize the bridge thread."""
         super().__init__(parent)
         self.loop: asyncio.AbstractEventLoop | None = None
-        self._started_event = asyncio.Event()
-
-    # -- QThread entry point --------------------------------------------------
 
     def run(self) -> None:
         """Create a fresh event loop and run it until stop_loop() is called."""
@@ -44,14 +32,11 @@ class AsyncioBridge(QThread):
         try:
             self.loop.run_forever()
         finally:
-            # Drain remaining tasks so nothing is abandoned
             pending = asyncio.all_tasks(self.loop)
             if pending:
                 self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self.loop.close()
             self.loop = None
-
-    # -- Public API (called from the Qt / main thread) -------------------------
 
     def submit(self, coro) -> Future | None:
         """Schedule *coro* on the asyncio loop from the Qt thread.

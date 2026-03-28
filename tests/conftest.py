@@ -1,9 +1,13 @@
 """Shared test fixtures."""
 
-import pytest
+import os
 from pathlib import Path
 
+import pytest
+
 from ailm.config.schema import AilmConfig
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 @pytest.fixture

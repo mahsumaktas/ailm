@@ -52,7 +52,8 @@ def _toml_value(value: object) -> str:
     if isinstance(value, bool):
         return str(value).lower()
     if isinstance(value, str):
-        return f'"{value}"'
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
     if isinstance(value, list):
         inner = ", ".join(_toml_value(v) for v in value)
         return f"[{inner}]"

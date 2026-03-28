@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _read_new_lines(log_path: str, file_pos: int) -> tuple[list[str], int]:
-    """Sync file read — runs in thread via to_thread."""
+    """Read and return log lines appended after ``file_pos``."""
     path = Path(log_path)
     try:
         file_size = path.stat().st_size
@@ -31,6 +31,8 @@ def _read_new_lines(log_path: str, file_pos: int) -> tuple[list[str], int]:
 
 
 class PacmanSource(WatchdogSource):
+    """Watch the pacman log and emit package update events."""
+
     name = "pacman"
 
     def __init__(self, log_path: str, backend: PacmanBackend | None = None) -> None:

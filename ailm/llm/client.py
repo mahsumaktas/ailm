@@ -19,6 +19,8 @@ _REQUIRED_CLASSIFICATION_KEYS = {"type", "severity", "summary"}
 
 
 class OllamaClient:
+    """Async HTTP client for Ollama generation and health checks."""
+
     def __init__(self, base_url: str, model: str, timeout: int) -> None:
         self._base_url = base_url
         self._model = model
@@ -28,9 +30,11 @@ class OllamaClient:
 
     @property
     def available(self) -> bool:
+        """Return whether the client currently considers Ollama reachable."""
         return self._available
 
     async def start(self) -> None:
+        """Create the HTTP client and perform an initial health check."""
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(self._timeout, connect=5.0),
@@ -38,6 +42,7 @@ class OllamaClient:
         self._available = await self.health_check()
 
     async def close(self) -> None:
+        """Close the HTTP client and mark the backend unavailable."""
         if self._http is not None:
             await self._http.aclose()
             self._http = None
@@ -51,6 +56,7 @@ class OllamaClient:
         await self.close()
 
     async def health_check(self) -> bool:
+        """Probe the Ollama tags endpoint and refresh availability state."""
         if self._http is None:
             return False
         try:

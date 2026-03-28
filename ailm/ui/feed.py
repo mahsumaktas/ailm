@@ -131,6 +131,7 @@ class FeedWidget(QScrollArea):
 
     @property
     def card_count(self) -> int:
+        """Return the number of event cards currently displayed."""
         return len(self._cards)
 
     # -- internals ------------------------------------------------------------

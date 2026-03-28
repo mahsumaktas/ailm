@@ -29,6 +29,7 @@ class EventBus:
         self._subscribers[event_type].append(callback)
 
     def unsubscribe(self, event_type: EventType | None, callback: Callback) -> None:
+        """Remove a previously registered callback if it is present."""
         try:
             self._subscribers[event_type].remove(callback)
         except ValueError:
@@ -42,11 +43,13 @@ class EventBus:
             logger.warning("Event bus full, dropping: %s/%s", event.type.value, event.source)
 
     async def start(self) -> None:
+        """Start the background dispatch task if it is not already running."""
         if self._task is not None and not self._task.done():
             return
         self._task = asyncio.create_task(self._dispatch())
 
     async def stop(self) -> None:
+        """Stop the dispatch task and drain shutdown bookkeeping safely."""
         if self._task is None:
             return
         try:
@@ -61,10 +64,12 @@ class EventBus:
 
     @property
     def running(self) -> bool:
+        """Return whether the dispatch task is currently active."""
         return self._task is not None and not self._task.done()
 
     @property
     def pending(self) -> int:
+        """Return the number of queued events awaiting dispatch."""
         return self._queue.qsize()
 
     async def _dispatch(self) -> None:

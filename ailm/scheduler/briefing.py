@@ -80,7 +80,7 @@ def _build_fallback_briefing(events: list[SystemEvent]) -> str:
         type_counts[event.type.value] += 1
         severity_counts[event.severity.value] += 1
 
-    lines = [f"Morning briefing (LLM unavailable — plain summary):"]
+    lines = ["Morning briefing (LLM unavailable — plain summary):"]
     lines.append(f"Total events in last 24h: {len(events)}")
     lines.append("")
 

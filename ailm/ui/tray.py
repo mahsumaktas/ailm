@@ -37,6 +37,7 @@ class AilmTray(QSystemTrayIcon):
 
     @property
     def status(self) -> SystemStatus:
+        """Return the currently displayed system status."""
         return self._status
 
     def set_status(self, status: SystemStatus) -> None:

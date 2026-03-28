@@ -38,9 +38,11 @@ that needs attention. End with overall system health assessment."""
 
 
 def build_classification_prompt(log_line: str) -> str:
+    """Render the user prompt for classifying a log line."""
     # .replace() instead of .format() — log lines may contain { } (JSON logs)
     return CLASSIFICATION_USER.replace("{log_line}", log_line)
 
 
 def build_briefing_prompt(events_summary: str) -> str:
+    """Render the user prompt for generating a morning briefing."""
     return BRIEFING_USER.replace("{events_summary}", events_summary)

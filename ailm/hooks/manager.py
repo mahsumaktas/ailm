@@ -23,6 +23,8 @@ class HookManager:
 
     def unregister(self, plugin: object) -> None:
         """Unregister a previously registered plugin."""
+        if self.pm.get_name(plugin) is None:
+            return
         self.pm.unregister(plugin)
 
     def fire_event(self, event: SystemEvent) -> None:

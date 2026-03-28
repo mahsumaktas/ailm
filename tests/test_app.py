@@ -302,22 +302,22 @@ class TestSourceRegistration:
         assert "snapshot" in names
 
     def test_source_count_minimal(self, app_config):
-        """With journald off and no snapshots: 4 sources."""
+        """With journald off and no snapshots: 5 sources (includes pacnew)."""
         from ailm.app import Application
 
         app = Application(app_config)
         app._register_sources()
-        assert len(app.sources) == 4
+        assert len(app.sources) == 5  # disk, services, pacman, reboot, pacnew
 
     def test_source_count_all(self, app_config_snapshots):
-        """With snapshots dir but no journald: 5 sources."""
+        """With snapshots dir and journald: 7 sources."""
         from ailm.app import Application
 
         # Enable journald too
         app_config_snapshots.sources.journald_enabled = True
         app = Application(app_config_snapshots)
         app._register_sources()
-        assert len(app.sources) == 6  # disk, services, pacman, reboot, snapshot, journald
+        assert len(app.sources) == 7  # disk, services, pacman, reboot, snapshot, pacnew, journald
 
 
 # ---------------------------------------------------------------------------

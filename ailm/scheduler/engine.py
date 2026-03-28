@@ -9,7 +9,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,31 @@ def _parse_cron(cron_expr: str) -> dict[str, str]:
     return dict(zip(("minute", "hour", "day", "month", "day_of_week"), parts))
 
 
+def _field_matches(pattern: str, value: int) -> bool:
+    """Return whether a single cron field matches the provided value."""
+    for token in pattern.split(","):
+        base, sep, step_text = token.partition("/")
+        step = int(step_text) if sep else 1
+
+        if base == "*":
+            if value % step == 0:
+                return True
+            continue
+
+        if "-" in base:
+            start_text, end_text = base.split("-", 1)
+            start = int(start_text)
+            end = int(end_text)
+            if start <= value <= end and (value - start) % step == 0:
+                return True
+            continue
+
+        if value == int(base):
+            return True
+
+    return False
+
+
 def _cron_matches(fields: dict[str, str], dt: datetime) -> bool:
     """Check if datetime matches cron fields."""
     checks = {
@@ -38,9 +63,7 @@ def _cron_matches(fields: dict[str, str], dt: datetime) -> bool:
         pattern = fields[key]
         if pattern == "*":
             continue
-        # Simple: exact match or comma-separated values
-        allowed = {int(v) for v in pattern.split(",")}
-        if value not in allowed:
+        if not _field_matches(pattern, value):
             return False
     return True
 
@@ -64,15 +87,18 @@ class SchedulerEngine:
 
     @property
     def running(self) -> bool:
+        """Return whether the scheduler has been started."""
         return self._running
 
     async def start(self) -> None:
+        """Mark the scheduler running and allow jobs to be registered."""
         if self._running:
             return
         self._running = True
         logger.info("Scheduler started")
 
     async def stop(self) -> None:
+        """Cancel all running job tasks and clear registered jobs."""
         if not self._running:
             return
         self._running = False
@@ -85,6 +111,7 @@ class SchedulerEngine:
         logger.info("Scheduler stopped")
 
     async def add_cron_job(self, func: AsyncJobFunc, cron_expr: str, job_id: str) -> None:
+        """Register and start a cron-driven coroutine job."""
         fields = _parse_cron(cron_expr)
         job = _Job(job_id=job_id, func=func, cron=fields)
         self._jobs.append(job)
@@ -93,6 +120,7 @@ class SchedulerEngine:
         logger.info("Cron job added: %s (%s)", job_id, cron_expr)
 
     async def add_interval_job(self, func: AsyncJobFunc, seconds: int, job_id: str) -> None:
+        """Register and start a fixed-interval coroutine job."""
         job = _Job(job_id=job_id, func=func, interval=seconds)
         self._jobs.append(job)
         task = asyncio.create_task(self._run_interval(job))

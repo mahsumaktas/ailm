@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from ailm.core.models import EventType, Severity, SystemEvent, SystemStatus
+from ailm.core.models import Severity, SystemEvent, SystemStatus
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,15 @@ class StatusTracker:
 
     @property
     def status(self) -> SystemStatus:
+        """Return the current aggregate system status."""
         return self._status
 
     def on_status_change(self, callback) -> None:
+        """Register a callback invoked with ``(old, new)`` status pairs."""
         self._on_change.append(callback)
 
     def set_llm_available(self, available: bool) -> None:
+        """Update LLM availability and recompute the overall status."""
         self._llm_available = available
         self._recompute()
 

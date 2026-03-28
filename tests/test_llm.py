@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -197,6 +198,7 @@ class TestOllamaClient:
 
     async def test_context_manager(self):
         client = OllamaClient("http://localhost:11434", "qwen3.5:9b", timeout=30)
+        client.health_check = AsyncMock(return_value=False)
         async with client:
             # start() called — http client created (health check may fail, that's fine)
             assert client._http is not None

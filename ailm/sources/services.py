@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class ServiceMonitor(PollingSource):
+    """Poll systemd for failed units and emit events for new failures."""
+
     name = "services"
 
     def __init__(self, interval: int = 300, init_system: SystemdInit | None = None) -> None:
@@ -18,6 +20,7 @@ class ServiceMonitor(PollingSource):
         self._known_failures: set[str] = set()
 
     async def check(self) -> None:
+        """Compare failed units against known failures and publish new ones."""
         failed_list = await self._init.get_failed_units()
         failed_units = set(failed_list)
 

@@ -2,11 +2,11 @@
   <h1>ailm</h1>
   <p><strong>AI-powered Linux system companion that watches your machine and tells you what matters.</strong></p>
   <p>
-    <img src="https://img.shields.io/badge/status-v0.1--dev-blue" />
+    <img src="https://img.shields.io/badge/status-v0.2--dev-blue" />
     <img src="https://img.shields.io/badge/platform-Linux-blue" />
     <img src="https://img.shields.io/badge/LLM-local--first-green" />
     <img src="https://img.shields.io/badge/license-MIT-lightgrey" />
-    <img src="https://img.shields.io/badge/tests-359%20passing-brightgreen" />
+    <img src="https://img.shields.io/badge/tests-528%20passing-brightgreen" />
     <img src="https://img.shields.io/badge/python-%3E%3D3.12-blue" />
   </p>
   <p>
@@ -56,42 +56,49 @@ ailm sits in the middle: it reads the noise, understands the context via LLM, an
 - **Learns over time.** The more you use it, the less noise you see.
 - **Graceful degradation.** If Ollama is down, ailm still works — events queue, analysis waits.
 
-## v0.1 Features (Implemented)
+## Features
+
+### v0.1 — Morning Briefing
 
 | Feature | Status |
 |---|---|
-| System tray icon (green/amber/red health status) | ✅ Done |
-| Popup feed with LLM-classified event cards | ✅ Done |
-| Morning briefing (daily digest at 06:00) | ✅ Done |
-| journald log monitoring + regex pre-filter + LLM classification | ✅ Done |
-| Package update tracking (pacman ALPM log parser) | ✅ Done |
-| Snapshot event tracking (snapper/snap-pac watcher) | ✅ Done |
-| Disk usage alerts with severity dedup | ✅ Done |
-| Failed systemd service detection | ✅ Done |
-| Reboot detection (kernel mismatch check) | ✅ Done |
-| Safe actions whitelist (restart service, vacuum journal) | ✅ Done |
-| pluggy hook system (event/status/action hooks) | ✅ Done |
-| Evidence format validation for LLM outputs | ✅ Done |
-| Graceful degradation (LLM queue + health check) | ✅ Done |
-| SystemStatus tracking (healthy/degraded/critical) | ✅ Done |
-| Structured logging with rotation | ✅ Done |
-| systemd user service for auto-start | ✅ Done |
-| Control panel tray (start/stop, model switch) | ✅ Done |
+| System tray icon (green/amber/red health status) | ✅ |
+| Popup feed with LLM-classified event cards | ✅ |
+| Morning briefing (daily digest at 06:00) | ✅ |
+| journald log monitoring + regex pre-filter + LLM classification | ✅ |
+| Package update tracking (pacman ALPM log parser) | ✅ |
+| Snapshot event tracking (snapper/snap-pac watcher) | ✅ |
+| Disk usage alerts with severity dedup | ✅ |
+| Failed systemd service detection | ✅ |
+| Reboot detection (kernel mismatch check) | ✅ |
+| Safe actions whitelist (restart service, vacuum journal) | ✅ |
+| pluggy hook system (event/status/action hooks) | ✅ |
+| Graceful degradation (LLM queue + health check) | ✅ |
+| systemd user service + control panel tray | ✅ |
 
-### Planned (v0.2+)
+### v0.2 — Resilience (NEW)
+
+Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patterns.
+
+| Feature | Status |
+|---|---|
+| Event dedup + rate limiting (fingerprint, baseline, 20/min cap) | ✅ |
+| EMA trend detection (half-window slope, disk/latency tracking) | ✅ |
+| Crash-resilient ring buffer log (fdatasync 10s, survives power loss) | ✅ |
+| Boot crash detection (state file + pre-crash log analysis) | ✅ |
+| SIGHUP config hot-reload (LLM model, intervals, dedup params) | ✅ |
+| .pacnew detection (hourly /etc scan, diff preview, merge warning) | ✅ |
+
+### Planned
 
 | Feature | Version |
 |---|---|
-| .pacnew detection + LLM merge suggestions | v0.2 |
-| Chat interface with intent preview | v0.2 |
-| TOML hook configuration | v0.2 |
+| Chat interface with intent preview | v0.3 |
 | Hybrid LLM routing (local → cloud fallback) | v0.4 |
-| User preference learning | v0.4 |
 | Embedding-based anomaly detection (sqlite-vec) | v0.4 |
 | MCP server (Claude Code integration) | v0.5 |
 | Multi-distro support (Fedora, openSUSE) | v0.5 |
 | Telegram/iMessage/SMS briefings + remote query | v0.8 |
-| MCP tunnel for remote access | v0.8 |
 
 ## Architecture
 
@@ -113,9 +120,10 @@ ailm sits in the middle: it reads the noise, understands the context via LLM, an
 │  · DiskMonitor    │  · DB persist    │  · Ollama  │
 │  · ServiceMonitor │  · StatusTracker │  · Sched.  │
 │  · PacmanSource   │  · HookManager  │  · Actions  │
-│  · SnapshotSource │  · LLM classify │            │
-│  · RebootSource   │                  │            │
-│  · JournaldSource │                  │            │
+│  · SnapshotSource │  · LLM classify │  · Dedup   │
+│  · RebootSource   │  · RingBufferLog│  · Trend   │
+│  · JournaldSource │  · CrashDetect  │            │
+│  · PacnewSource   │                  │            │
 ├──────────────────────────────────────────────────┤
 │                 SQLite WAL + Ollama               │
 └──────────────────────────────────────────────────┘
@@ -195,7 +203,7 @@ ailm is designed to be invisible:
 ## Development
 
 ```bash
-# Run tests (359 passing)
+# Run tests (528 passing)
 python -m pytest tests/ -q
 
 # Type checking

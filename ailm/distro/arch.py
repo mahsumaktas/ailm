@@ -20,6 +20,7 @@ class SystemdInit:
     """InitSystem protocol implementation using systemctl subprocess."""
 
     async def get_failed_units(self) -> list[str]:
+        """Return the names of currently failed systemd units."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "systemctl", "list-units", "--state=failed", "--no-legend", "--plain",
@@ -38,6 +39,7 @@ class SystemdInit:
         return units
 
     async def restart_unit(self, name: str) -> bool:
+        """Restart a systemd unit and report whether the command succeeded."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 "systemctl", "restart", name,
@@ -57,6 +59,7 @@ class PacmanBackend:
     """PackageManager protocol implementation for pacman."""
 
     def parse_log_line(self, line: str) -> PackageEvent | None:
+        """Parse a single pacman log line into a normalized package event."""
         m = _ALPM_RE.match(line)
         if not m:
             return None
@@ -76,6 +79,7 @@ class PacmanBackend:
                             old_version=old, new_version=new)
 
     def get_recent_updates(self, since: datetime) -> list[PackageEvent]:
+        """Return recent package updates newer than ``since``."""
         return []  # used by future phases — reads log file from disk
 
 
@@ -86,6 +90,7 @@ class SnapperBackend:
         self._path = Path(snapshot_path)
 
     def list_recent(self, n: int = 10) -> list[Snapshot]:
+        """Return the most recent ``n`` snapshots ordered newest-first."""
         if not self._path.is_dir():
             return []
         # Numeric sort (not string) — "9" < "10" < "100"
@@ -103,6 +108,7 @@ class SnapperBackend:
         return snapshots
 
     def get_latest(self) -> Snapshot | None:
+        """Return the newest snapshot if one exists."""
         recent = self.list_recent(1)
         return recent[0] if recent else None
 

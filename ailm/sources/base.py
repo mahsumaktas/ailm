@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import suppress
+from queue import Empty, SimpleQueue
 from typing import Protocol, runtime_checkable
 
 from watchdog.observers import Observer
@@ -24,11 +25,17 @@ async def cancel_task(task: asyncio.Task | None) -> None:
 
 @runtime_checkable
 class Source(Protocol):
+    """Protocol implemented by every event source."""
+
     name: str
 
-    async def start(self, bus: EventBus) -> None: ...
+    async def start(self, bus: EventBus) -> None:
+        """Attach the source to an event bus and begin monitoring."""
+        ...
 
-    async def stop(self) -> None: ...
+    async def stop(self) -> None:
+        """Stop the source and release any background resources."""
+        ...
 
 
 class PollingSource:
@@ -43,19 +50,23 @@ class PollingSource:
 
     @property
     def bus(self) -> EventBus:
+        """Return the bound event bus or raise if the source is not started."""
         if self._bus is None:
             raise RuntimeError(f"Source '{self.name}' not started — call start() first")
         return self._bus
 
     async def start(self, bus: EventBus) -> None:
+        """Bind the event bus and start the polling task."""
         self._bus = bus
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """Cancel the polling task if it is running."""
         await cancel_task(self._task)
         self._task = None
 
     async def check(self) -> None:
+        """Perform a single polling cycle."""
         raise NotImplementedError
 
     async def _loop(self) -> None:
@@ -76,11 +87,15 @@ class WatchdogSource:
         self._bus: EventBus | None = None
         self._observer: Observer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._bridge_task: asyncio.Task[None] | None = None
+        self._bridge_queue: SimpleQueue[tuple[str, object]] = SimpleQueue()
+        self._wake_event: asyncio.Event | None = None
         self._debounce_handle: asyncio.TimerHandle | None = None
         self._lock: asyncio.Lock | None = None
 
     @property
     def bus(self) -> EventBus:
+        """Return the bound event bus or raise if the source is not started."""
         if self._bus is None:
             raise RuntimeError(f"Source '{self.name}' not started — call start() first")
         return self._bus
@@ -89,14 +104,18 @@ class WatchdogSource:
         raise NotImplementedError
 
     async def start(self, bus: EventBus) -> None:
+        """Bind the event bus, start the queue bridge, and launch the observer."""
         self._bus = bus
         self._loop = asyncio.get_running_loop()
         self._lock = asyncio.Lock()
+        self._wake_event = asyncio.Event()
+        self._bridge_task = asyncio.create_task(self._bridge_loop())
         self._observer = self._setup_observer()
         self._observer.daemon = True
         self._observer.start()
 
     async def stop(self) -> None:
+        """Stop timers, stop the observer, and tear down the bridge task."""
         if self._debounce_handle is not None:
             self._debounce_handle.cancel()
             self._debounce_handle = None
@@ -104,13 +123,16 @@ class WatchdogSource:
             self._observer.stop()
             await asyncio.to_thread(self._observer.join, 5)
             self._observer = None
+        await cancel_task(self._bridge_task)
+        self._bridge_task = None
+        self._loop = None
 
     def _schedule_debounced(self, coro_factory) -> None:
         """Debounced bridge from watchdog thread to asyncio. Collapses rapid events."""
         if self._loop is None:
             return
-        # All cancel/schedule logic runs on the event loop thread (thread-safe)
-        self._loop.call_soon_threadsafe(self._debounce_on_loop, coro_factory)
+        self._bridge_queue.put_nowait(("debounce", coro_factory))
+        self._loop.call_soon_threadsafe(self._wake_event.set)
 
     def _debounce_on_loop(self, coro_factory) -> None:
         """Runs on event loop thread — safe to touch _debounce_handle."""
@@ -119,21 +141,46 @@ class WatchdogSource:
 
         def _fire():
             self._debounce_handle = None
-            fut = asyncio.run_coroutine_threadsafe(coro_factory(), self._loop)
-            fut.add_done_callback(self._log_future_error)
+            if self._loop is None:
+                return
+            task = self._loop.create_task(coro_factory())
+            task.add_done_callback(self._log_task_error)
 
         self._debounce_handle = self._loop.call_later(DEBOUNCE_SECONDS, _fire)
 
     def _schedule_async(self, coro_factory) -> None:
         """Immediate (non-debounced) bridge from watchdog thread to asyncio."""
         if self._loop is not None:
-            fut = asyncio.run_coroutine_threadsafe(coro_factory(), self._loop)
-            fut.add_done_callback(self._log_future_error)
+            self._bridge_queue.put_nowait(("async", coro_factory))
+            self._loop.call_soon_threadsafe(self._wake_event.set)
+
+    async def _bridge_loop(self) -> None:
+        """Wait for wake signal, then drain queued callbacks from watchdog threads."""
+        while True:
+            await self._wake_event.wait()
+            self._wake_event.clear()
+            self._drain_bridge_queue()
+
+    def _drain_bridge_queue(self) -> None:
+        """Drain queued callbacks from watchdog threads."""
+        while True:
+            try:
+                mode, coro_factory = self._bridge_queue.get_nowait()
+            except Empty:
+                break
+
+            if mode == "debounce":
+                self._debounce_on_loop(coro_factory)
+            else:
+                if self._loop is None:
+                    continue
+                task = self._loop.create_task(coro_factory())
+                task.add_done_callback(self._log_task_error)
 
     @staticmethod
-    def _log_future_error(fut) -> None:
-        if fut.cancelled():
+    def _log_task_error(task: asyncio.Task) -> None:
+        if task.cancelled():
             return
-        exc = fut.exception()
+        exc = task.exception()
         if exc is not None:
             logger.error("Watchdog async callback error: %s", exc, exc_info=exc)
