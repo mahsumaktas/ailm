@@ -28,7 +28,9 @@ except ImportError:
     HAS_SYSTEMD = False
 
 # Comprehensive prefilter — catch every meaningful system event.
-# Grouped by category for maintainability.
+# Comprehensive prefilter — grouped by category.
+# Priority 0-4 and kernel messages bypass this filter entirely.
+# This only applies to priority 5-7 (NOTICE/INFO/DEBUG).
 PREFILTER_RE = re.compile(
     r"(?i)\b("
     # Core errors
@@ -37,40 +39,61 @@ PREFILTER_RE = re.compile(
     # Process/memory
     r"oom|segfault|killed|coredump|core dump|"
     r"out of memory|cannot allocate|memory pressure|"
-    # Network/auth
+    r"earlyoom|oom_reaper|invoked oom|"
+    # Network/auth/DNS
     r"timeout|refused|unreachable|dropped|"
     r"invalid user|authentication fail|permission denied|"
     r"ban |unban |brute.force|unauthorized|"
     r"connection reset|handshake fail|certificate.*error|"
+    r"DNSSEC|resolve.*fail|no.*servers.*reached|"
+    r"NetworkManager.*connect|NetworkManager.*disconnect|"
+    r"wpa_supplicant.*fail|wpa_supplicant.*auth|"
+    r"carrier.*lost|link.*down|IP.*changed|"
     # GPU/hardware
     r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error|bus_lock|split_lock|"
     r"hardware error|machine check|thermal|overheat|throttl|"
+    r"coolercontrol|fan.*speed|"
     # Disk/filesystem
     r"I/O error|read.only|remount|filesystem|fsck|"
-    r"BTRFS|EXT4.*error|XFS.*error|"
+    r"BTRFS|EXT4.*error|XFS.*error|btrfs.*scrub|"
     r"no space left|disk full|quota|"
-    # Systemd lifecycle (only failures, not normal start/stop)
+    r"SMART.*error|smartd|fstrim|TRIM|"
+    # Systemd lifecycle (failures + important state changes)
     r"start-limit|entered failed|main process exited|"
     r"unit.*failed|"
-    # USB/bluetooth/audio
-    r"usb.*disconnect|usb.*reset|usb.*overcurrent|"
+    r"timer.*fail|timer.*miss|"
+    # USB/bluetooth/audio/thunderbolt
+    r"usb.*disconnect|usb.*reset|usb.*overcurrent|usb.*new.*device|"
     r"bluetooth.*fail|bluetooth.*error|btusb|"
     r"pipewire.*error|pulseaudio.*fail|alsa.*error|"
-    # Session/login (failures + power state changes)
+    r"thunderbolt|bolt.*device|"
+    # Session/login/power
     r"login.*fail|pam_unix.*fail|"
     r"suspend|resume|hibernate|lid |"
+    r"earlyoom|systemd-oomd|"
     # Firewall
     r"iptables|nftables|DROP|REJECT|firewall|"
-    # Kernel modules
+    # Kernel modules/DKMS
     r"module.*load|insmod|modprobe|module.*fail|"
-    # Wayland/display
+    r"dkms.*build|dkms.*install|dkms.*error|"
+    # Display/compositor
     r"compositor|wayland.*error|wlroots|kwin.*crash|plasmashell|"
-    # Cron/scheduled (only errors, not normal execution)
+    r"Xorg.*error|sddm|display.*manager|"
+    # Scheduled tasks
     r"cron.*error|anacron.*fail|logrotate.*error|"
+    r"paccache|pacman.*hook|"
     # Package/update
-    r"pacman|ALPM|upgrade|downgrad|"
-    # Snapper/snapshot (only actual snapshot events, not DBus lifecycle)
-    r"snapper.*error|snapshot.*creat|snapshot.*delet"
+    r"pacman|ALPM|upgrade|downgrad|flatpak.*update|"
+    # Snapper/boot
+    r"snapper.*error|snapshot.*creat|snapshot.*delet|"
+    r"limine|grub|bootloader|"
+    # Remote access
+    r"rustdesk|sunshine.*stream|moonlight|"
+    # Scheduling/priority
+    r"ananicy|nice.*chang|ionice|"
+    # Virtualization/containers
+    r"docker.*error|containerd.*error|podman|"
+    r"vfio|iommu.*error"
     r")"
 )
 

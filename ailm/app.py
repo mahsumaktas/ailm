@@ -18,6 +18,8 @@ from ailm.hooks.builtin import LoggingPlugin
 from ailm.llm import LLMTask, LLMTaskQueue, OllamaClient
 from ailm.scheduler import SchedulerEngine, generate_morning_briefing
 from ailm.sources.base import Source
+from ailm.sources.btrfs import BtrfsSource
+from ailm.sources.coredump import CoredumpSource
 from ailm.sources.disk import DiskMonitor
 from ailm.sources.docker import DockerSource
 from ailm.sources.hwmon import HwmonSource
@@ -215,6 +217,8 @@ class Application:
         self.sources.append(PressureSource(interval=30, trend_tracker=self.trend_tracker))
         self.sources.append(HwmonSource(interval=30, trend_tracker=self.trend_tracker))
         self.sources.append(SysHealthSource(interval=60, trend_tracker=self.trend_tracker))
+        self.sources.append(BtrfsSource())
+        self.sources.append(CoredumpSource())
         # Second NVMe if present
         if Path("/dev/nvme1").exists():
             self.sources.append(SmartSource(device="/dev/nvme1"))
