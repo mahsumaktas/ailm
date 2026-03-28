@@ -7,7 +7,6 @@ All subprocess: create_subprocess_exec with fixed args. No shell, no user input.
 import asyncio
 import json
 import logging
-import socket
 
 from ailm.core.models import EventType, Severity, SystemEvent
 from ailm.sources.base import PollingSource, cancel_task
@@ -152,9 +151,13 @@ class ExternalCollector(PollingSource):
             self._svc_state[unit] = active
         for port, label in _PORTS:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=2):
-                    up = True
-            except (OSError, ConnectionRefusedError):
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", port), timeout=2,
+                )
+                writer.close()
+                await writer.wait_closed()
+                up = True
+            except (OSError, asyncio.TimeoutError):
                 up = False
             was = self._port_state.get(port)
             if was and not up:

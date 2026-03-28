@@ -59,10 +59,7 @@ class BatchAnalyzer:
             return
 
         since = datetime.now(timezone.utc) - timedelta(minutes=5)
-        events = await self._repo.get_events_since(since, limit=50)
-
-        # Only analyze events without summaries
-        unanalyzed = [e for e in events if e.summary is None]
+        unanalyzed = await self._repo.get_unanalyzed_since(since, limit=50)
         if not unanalyzed:
             return
 
@@ -78,9 +75,7 @@ class BatchAnalyzer:
         if result is None:
             # LLM unavailable — set simple summaries from raw_data
             for e in unanalyzed:
-                raw = e.raw_data
-                summary = raw[raw.index("msg=") + 4:][:120] if "msg=" in raw else raw[:120]
-                await self._repo.update_summary(e.id, summary)
+                await self._fallback_summary(e)
             return
 
         # Parse batch response
@@ -89,9 +84,7 @@ class BatchAnalyzer:
         except json.JSONDecodeError:
             logger.debug("Batch analysis returned invalid JSON, using raw summaries")
             for e in unanalyzed:
-                raw = e.raw_data
-                summary = raw[raw.index("msg=") + 4:][:120] if "msg=" in raw else raw[:120]
-                await self._repo.update_summary(e.id, summary)
+                await self._fallback_summary(e)
             return
 
         # Apply per-event summaries
@@ -114,9 +107,7 @@ class BatchAnalyzer:
         analyzed_ids = {item.get("id") for item in parsed.get("events", [])}
         for e in unanalyzed:
             if e.id not in analyzed_ids:
-                raw = e.raw_data
-                summary = raw[raw.index("msg=") + 4:][:120] if "msg=" in raw else raw[:120]
-                await self._repo.update_summary(e.id, summary)
+                await self._fallback_summary(e)
 
         # Publish patterns as ANALYSIS event
         patterns = parsed.get("patterns", [])
@@ -135,3 +126,9 @@ class BatchAnalyzer:
                 ))
 
         logger.info("Batch analyzed %d events", len(unanalyzed))
+
+    async def _fallback_summary(self, event: SystemEvent) -> None:
+        """Set a simple summary from raw_data when LLM is unavailable."""
+        raw = event.raw_data
+        summary = raw[raw.index("msg=") + 4:][:120] if "msg=" in raw else raw[:120]
+        await self._repo.update_summary(event.id, summary)

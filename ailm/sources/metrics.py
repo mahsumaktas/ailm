@@ -249,13 +249,18 @@ class MetricsCollector(PollingSource):
                 self._alerts[k] = False
 
     async def _nvidia(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "nvidia-smi", "--query-gpu=temperature.gpu,memory.used,memory.total,power.draw",
                 "--format=csv,noheader,nounits",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p:
+                p.kill()
+            return
+        except OSError:
             return
         parts = [x.strip() for x in out.decode().strip().split(",")]
         if len(parts) < 4:

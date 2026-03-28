@@ -55,6 +55,16 @@ class EventRepository:
             )
         return [e for r in rows if (e := self._row_to_event(r)) is not None]
 
+    async def get_unanalyzed_since(
+        self, since: datetime, limit: int = 50,
+    ) -> list[SystemEvent]:
+        """Return events with no summary newer than ``since``."""
+        rows = await self.db.conn.execute_fetchall(
+            f"SELECT {_EVENT_COLS} FROM events WHERE timestamp >= ? AND summary IS NULL ORDER BY timestamp LIMIT ?",
+            (since.isoformat(), limit),
+        )
+        return [e for r in rows if (e := self._row_to_event(r)) is not None]
+
     async def get_recent_events(self, limit: int = 50) -> list[SystemEvent]:
         """Return the most recent events in reverse chronological order."""
         rows = await self.db.conn.execute_fetchall(
