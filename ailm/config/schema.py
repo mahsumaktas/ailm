@@ -35,6 +35,10 @@ class SourcesConfig(BaseModel):
         r"xkbcomp are not fatal",
         r"Using degraded feature set UDP",
         r"homed users.*GDBus\.Error",
+        r"Cannot find Bluez 5 adapter",
+        r"UFW BLOCK.*224\.0\.0",
+        r"UFW BLOCK.*multicast",
+        r"pa_operation is nullptr",
     ]
 
     @model_validator(mode="after")
