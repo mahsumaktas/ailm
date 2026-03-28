@@ -17,11 +17,15 @@ CLASSIFICATION_USER = """\
 {log_line}
 </log_content>
 
-Classify the above log entry. Respond with ONLY a JSON object:
+Classify the above log entry. Your summary MUST start with the service or unit \
+name, then use the exact error keywords from the log. Do not paraphrase — be \
+deterministic and consistent.
+
+Respond with ONLY a JSON object:
 {"type": "<package_update|service_fail|disk_alert|log_anomaly|reboot_required|system_metric>", \
 "severity": "<info|warning|critical>", \
-"summary": "<one sentence>", \
-"requires_action": <true|false>}"""
+"summary": "<service_name: exact error keywords, one sentence>", \
+"action": "<restart_service|reboot|ignore|investigate>"}"""
 
 BRIEFING_SYSTEM = """\
 You are ailm, an AI Linux system companion. Generate a concise morning \

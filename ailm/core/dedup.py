@@ -92,6 +92,22 @@ def fingerprint(source: str, unit: str, message: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def normalize_summary(summary: str) -> str:
+    """Normalize an LLM summary for grouping (lowercase, strip volatile parts)."""
+    result = summary.lower()
+    result = _PID_RE.sub("", result)
+    result = _HEX_RE.sub("", result)
+    result = _NUM_RE.sub("", result)
+    result = re.sub(r"[^\w\s]", "", result)
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
+
+
+def summary_fingerprint(summary: str) -> str:
+    """Produce a hash from a normalized summary for dedup grouping."""
+    return hashlib.sha256(normalize_summary(summary).encode()).hexdigest()[:16]
+
+
 class EventDedup:
     """Stateful dedup filter. Call should_publish() before emitting events."""
 

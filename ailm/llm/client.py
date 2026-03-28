@@ -66,7 +66,9 @@ class OllamaClient:
             self._available = False
         return self._available
 
-    async def generate(self, prompt: str, system: str | None = None) -> str | None:
+    async def generate(
+        self, prompt: str, system: str | None = None, temperature: float = 0.0,
+    ) -> str | None:
         """Raw generation. Returns None if unavailable or on error."""
         if self._http is None or not self._available:
             return None
@@ -78,6 +80,7 @@ class OllamaClient:
                     "prompt": prompt,
                     "system": system or "",
                     "stream": False,
+                    "options": {"temperature": temperature},
                 },
             )
             resp.raise_for_status()
@@ -111,4 +114,4 @@ class OllamaClient:
     async def generate_briefing(self, events_summary: str) -> str | None:
         """Generate a morning briefing from event summaries."""
         prompt = build_briefing_prompt(events_summary)
-        return await self.generate(prompt, system=BRIEFING_SYSTEM)
+        return await self.generate(prompt, system=BRIEFING_SYSTEM, temperature=0.3)

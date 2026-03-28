@@ -23,6 +23,19 @@ class SourcesConfig(BaseModel):
     disk_critical_pct: int = Field(default=95, ge=1, le=100)
     service_interval: int = Field(default=300, gt=0)
     disk_slope_threshold: float = Field(default=0.5, gt=0.0)  # %/hour for trend alert
+    noise_patterns: list[str] = [
+        r"vaExportSurfaceHandle",
+        r"vaapi_wrapper",
+        r"display\.cc:\d+\] Frame",
+        r"The X11 connection broke",
+        r"Failed to register with host portal",
+        r"Failed to open drm device",
+        r"failed to activate the on-screen keyboard",
+        r"Fontconfig error.*Cannot load default config",
+        r"xkbcomp are not fatal",
+        r"Using degraded feature set UDP",
+        r"homed users.*GDBus\.Error",
+    ]
 
     @model_validator(mode="after")
     def warn_less_than_critical(self) -> "SourcesConfig":

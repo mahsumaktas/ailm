@@ -9,7 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
@@ -112,3 +112,22 @@ class Database:
                 "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
             )
             await self.conn.commit()
+        else:
+            current_version = row[0]["version"]
+            if current_version < 2:
+                await self._migrate_v2()
+                await self.conn.execute(
+                    "UPDATE schema_version SET version = ?", (SCHEMA_VERSION,)
+                )
+                await self.conn.commit()
+                logger.info("Database migrated to schema version %d", SCHEMA_VERSION)
+
+    async def _migrate_v2(self) -> None:
+        """Add summary_hash column for post-LLM dedup."""
+        cols = await self.conn.execute_fetchall("PRAGMA table_info(events)")
+        col_names = {c["name"] for c in cols}
+        if "summary_hash" not in col_names:
+            await self.conn.execute("ALTER TABLE events ADD COLUMN summary_hash TEXT")
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_summary_hash ON events(summary_hash)"
+            )

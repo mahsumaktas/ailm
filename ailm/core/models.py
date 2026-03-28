@@ -29,6 +29,14 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
+_SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.CRITICAL: 2}
+
+
+def severity_max(a: Severity, b: Severity) -> Severity:
+    """Return the more severe of two severity levels."""
+    return a if _SEVERITY_ORDER[a] >= _SEVERITY_ORDER[b] else b
+
+
 class SystemStatus(str, Enum):
     """Overall application health states derived from recent events."""
 
@@ -48,6 +56,7 @@ class SystemEvent:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     id: int | None = None
     summary: str | None = None
+    summary_hash: str | None = None
     user_action: str | None = None
     embedding: bytes | None = None  # v0.4 — sqlite-vec
 

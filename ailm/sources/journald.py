@@ -38,6 +38,14 @@ BATCH_SECONDS = 5
 BUFFER_MAXLEN = 5000
 FLUSH_YIELD_EVERY = 100  # yield to event loop every N publishes
 
+
+def compile_noise_filter(patterns: list[str]) -> re.Pattern | None:
+    """Compile a list of regex patterns into a single combined pattern."""
+    if not patterns:
+        return None
+    combined = "|".join(f"(?:{p})" for p in patterns)
+    return re.compile(combined, re.IGNORECASE)
+
 _PRIORITY_MAP: dict[int, Severity] = {
     0: Severity.CRITICAL,  # EMERG
     1: Severity.CRITICAL,  # ALERT
@@ -90,12 +98,14 @@ class JournaldSource:
         batch_seconds: float = BATCH_SECONDS,
         dedup: EventDedup | None = None,
         startup_grace_seconds: float = 10.0,
+        noise_patterns: list[str] | None = None,
     ) -> None:
         if batch_seconds <= 0:
             raise ValueError("batch_seconds must be positive")
         self._batch_seconds = batch_seconds
         self._dedup = dedup
         self._startup_grace = startup_grace_seconds
+        self._noise_re = compile_noise_filter(noise_patterns or [])
         self._start_time: float = 0.0
         self._bus: EventBus | None = None
         self._buffer: deque[JournalEntry] = deque(maxlen=BUFFER_MAXLEN)
@@ -155,6 +165,8 @@ class JournaldSource:
                     for entry in reader:
                         msg = entry.get("MESSAGE", "")
                         if not msg or not matches_prefilter(msg):
+                            continue
+                        if self._noise_re is not None and self._noise_re.search(msg):
                             continue
 
                         ts = entry.get("__REALTIME_TIMESTAMP")

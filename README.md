@@ -84,10 +84,13 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 |---|---|
 | Event dedup + rate limiting + source aggregation | ✅ |
 | Startup grace period (suppress non-critical during first 10s) | ✅ |
+| Known noise filter (VAAPI, DRM, X11, configurable regex) | ✅ |
 | EMA trend detection (fast-poll 30s, 0.5%/hr threshold) | ✅ |
 | Crash-resilient ring buffer log (fdatasync 10s, survives power loss) | ✅ |
 | Boot crash detection (state file + pre-crash log analysis) | ✅ |
 | Fire-and-forget LLM classification (non-blocking bus) | ✅ |
+| Deterministic LLM (temperature=0, severity upgrade, action field) | ✅ |
+| Summary dedup normalization (summary_hash for grouping) | ✅ |
 | SIGHUP config hot-reload (LLM model, intervals, dedup params) | ✅ |
 | .pacnew detection (hourly /etc scan, diff preview, merge warning) | ✅ |
 

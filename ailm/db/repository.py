@@ -21,13 +21,14 @@ class EventRepository:
     async def insert_event(self, event: SystemEvent) -> int:
         """Insert an event and update the in-memory object with its row id."""
         cursor = await self.db.conn.execute(
-            """INSERT INTO events (timestamp, type, severity, summary, raw_data, source, user_action)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO events (timestamp, type, severity, summary, summary_hash, raw_data, source, user_action)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 event.timestamp.isoformat(),
                 event.type.value,
                 event.severity.value,
                 event.summary,
+                getattr(event, "summary_hash", None),
                 event.raw_data,
                 event.source,
                 event.user_action,
@@ -68,11 +69,19 @@ class EventRepository:
         )
         await self.db.conn.commit()
 
-    async def update_summary(self, event_id: int, summary: str) -> None:
-        """Update the generated summary for a stored event."""
-        await self.db.conn.execute(
-            "UPDATE events SET summary = ? WHERE id = ?", (summary, event_id)
-        )
+    async def update_summary(
+        self, event_id: int, summary: str, summary_hash: str | None = None,
+    ) -> None:
+        """Update the generated summary and optional hash for a stored event."""
+        if summary_hash is not None:
+            await self.db.conn.execute(
+                "UPDATE events SET summary = ?, summary_hash = ? WHERE id = ?",
+                (summary, summary_hash, event_id),
+            )
+        else:
+            await self.db.conn.execute(
+                "UPDATE events SET summary = ? WHERE id = ?", (summary, event_id)
+            )
         await self.db.conn.commit()
 
     async def get_event_count_by_type(self, since: datetime) -> dict[str, int]:

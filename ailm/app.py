@@ -200,7 +200,10 @@ class Application:
         if cfg.journald_enabled:
             dedup_cfg = self.config.dedup
             dedup = EventDedup(CoreDedupConfig.from_pydantic(dedup_cfg))
-            self.sources.append(JournaldSource(dedup=dedup))
+            self.sources.append(JournaldSource(
+                dedup=dedup,
+                noise_patterns=cfg.noise_patterns,
+            ))
 
     async def _setup_schedules(self) -> None:
         """Configure scheduled jobs."""
@@ -380,17 +383,15 @@ class Application:
         import asyncio
         asyncio.create_task(self._do_classify(event))
 
+    _VALID_ACTIONS = frozenset({"restart_service", "reboot", "investigate"})
+
     async def _do_classify(self, event: SystemEvent) -> None:
         """Background classification task — runs after bus dispatch completes."""
         try:
             if self.llm is not None and self.llm.available:
                 result = await self.llm.classify_log(event.raw_data)
                 if result is not None:
-                    summary = result.get("summary", event.raw_data[:120])
-                    event.summary = summary
-                    # event.id is set by _persist_event (runs before this task completes)
-                    if event.id is not None and self.repo is not None:
-                        await self.repo.update_summary(event.id, summary)
+                    await self._apply_classification(event, result)
                     return
 
             # LLM unavailable — queue for later
@@ -400,11 +401,9 @@ class Application:
                 try:
                     import json
                     parsed = json.loads(result_str)
-                    summary = parsed.get("summary", result_str[:120])
                 except (json.JSONDecodeError, AttributeError):
-                    summary = result_str[:120]
-                if event.id is not None and self.repo is not None:
-                    await self.repo.update_summary(event.id, summary)
+                    parsed = {"summary": result_str[:120]}
+                await self._apply_classification(event, parsed)
 
             self.llm_queue.enqueue(LLMTask(
                 prompt=build_classification_prompt(event.raw_data),
@@ -413,3 +412,31 @@ class Application:
             ))
         except Exception:
             logger.debug("Classification failed for event %s", event.id)
+
+    async def _apply_classification(self, event: SystemEvent, result: dict) -> None:
+        """Apply LLM classification result to event and persist changes."""
+        from ailm.core.dedup import summary_fingerprint
+        from ailm.core.models import Severity, severity_max
+
+        # Summary + hash for post-LLM dedup
+        summary = result.get("summary", event.raw_data[:120])
+        event.summary = summary
+        event.summary_hash = summary_fingerprint(summary)
+
+        # Severity upgrade (never downgrade)
+        llm_sev = result.get("severity", "").lower()
+        if llm_sev in ("info", "warning", "critical"):
+            upgraded = severity_max(event.severity, Severity(llm_sev))
+            if upgraded != event.severity:
+                event.severity = upgraded
+
+        # Action
+        action = result.get("action", "").lower()
+        if action in self._VALID_ACTIONS:
+            event.user_action = action
+
+        # Persist to DB
+        if event.id is not None and self.repo is not None:
+            await self.repo.update_summary(event.id, summary, event.summary_hash)
+            if event.user_action:
+                await self.repo.update_user_action(event.id, event.user_action)

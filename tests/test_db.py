@@ -74,7 +74,7 @@ class TestConnection:
     async def test_schema_version_set(self, db: Database):
         rows = await db.conn.execute_fetchall("SELECT version FROM schema_version")
         assert len(rows) == 1
-        assert rows[0][0] == 1
+        assert rows[0][0] == 2
 
     async def test_idempotent_connect(self, tmp_path: Path):
         """Connecting twice to same DB doesn't duplicate schema_version."""
