@@ -32,7 +32,8 @@ PREFILTER_RE = re.compile(
     r"(?i)\b(error|critical|fail|denied|oom|segfault|killed|panic|"
     r"coredump|timeout|refused|unreachable|dropped|degraded|"
     r"emergency|alert|fatal|abort|corrupt|"
-    r"invalid user|authentication failure|ban |unban )"
+    r"invalid user|authentication failure|ban |unban |"
+    r"NVRM|Xid|nvrm|gpu.*hang|PCIe.*error)"
 )
 
 BATCH_SECONDS = 5

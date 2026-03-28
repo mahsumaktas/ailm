@@ -12,15 +12,20 @@ from ailm.sources.base import WatchdogSource
 logger = logging.getLogger(__name__)
 
 
+_SNAPSHOT_WARN_COUNT = 50
+
+
 class SnapshotSource(WatchdogSource):
     """Watch a snapper directory and emit events for new snapshots."""
 
     name = "snapshot"
 
-    def __init__(self, snapshot_path: str) -> None:
+    def __init__(self, snapshot_path: str, warn_count: int = _SNAPSHOT_WARN_COUNT) -> None:
         super().__init__()
         self._snapshot_path = snapshot_path
         self._seen_snapshots: set[str] = set()
+        self._warn_count = warn_count
+        self._warned = False
 
     def _setup_observer(self) -> Observer:
         if not Path(self._snapshot_path).is_dir():
@@ -50,6 +55,18 @@ class SnapshotSource(WatchdogSource):
             summary=f"Snapshot #{dir_name} created",
         )
         await self.bus.publish(event)
+
+        # Warn if too many snapshots accumulating
+        total = len(self._seen_snapshots)
+        if total >= self._warn_count and not self._warned:
+            self._warned = True
+            await self.bus.publish(SystemEvent(
+                type=EventType.DISK_ALERT,
+                severity=Severity.WARNING,
+                raw_data=f"snapshot_count={total} threshold={self._warn_count}",
+                source=self.name,
+                summary=f"{total} snapshots accumulated — consider cleanup",
+            ))
 
 
 class _SnapshotHandler(FileSystemEventHandler):

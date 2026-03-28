@@ -95,6 +95,11 @@ Inspired by [pi-power-guard](https://github.com/mahsumaktas/pi-power-guard) patt
 | .pacnew detection (hourly /etc scan, diff preview, merge warning) | ✅ |
 | System metrics trend (CPU, RAM, swap, network via psutil) | ✅ |
 | Docker container lifecycle monitoring (start/stop/die/oom) | ✅ |
+| NVIDIA GPU monitoring (temp, VRAM, power, Xid errors) | ✅ |
+| NVMe SMART health (wear, spare, media errors, temperature) | ✅ |
+| Tailscale mesh monitoring (peer online/offline) | ✅ |
+| Security CVE scanning (arch-audit, daily) | ✅ |
+| Snapshot count warning (configurable threshold) | ✅ |
 | SSH brute-force detection (journald prefilter) | ✅ |
 
 ### Planned

@@ -1,0 +1,133 @@
+"""NVIDIA GPU monitoring — temperature, VRAM, power, Xid errors.
+
+Uses nvidia-smi via create_subprocess_exec with fixed arguments only.
+No shell invocation, no user input interpolation.
+Gracefully disabled when nvidia-smi is not available.
+"""
+
+import asyncio
+import logging
+
+from ailm.core.models import EventType, Severity, SystemEvent
+from ailm.core.trend import TrendTracker
+from ailm.sources.base import PollingSource
+
+logger = logging.getLogger(__name__)
+
+_QUERY_FIELDS = "temperature.gpu,memory.used,memory.total,power.draw,pstate,clocks.gr,clocks.mem"
+_VRAM_WARN_PCT = 90
+
+
+class NvidiaSource(PollingSource):
+    """Poll nvidia-smi for GPU metrics and publish alerts.
+
+    All subprocess calls use create_subprocess_exec with hardcoded
+    arguments — no shell invocation, no user input interpolation.
+    """
+
+    name = "nvidia"
+
+    def __init__(
+        self,
+        interval: int = 30,
+        trend_tracker: TrendTracker | None = None,
+    ) -> None:
+        super().__init__(interval)
+        self._trend = trend_tracker
+        self._available = False
+        self._last_vram_alert = False
+
+    async def start(self, bus) -> None:
+        self._available = await self._check_nvidia()
+        if not self._available:
+            logger.info("nvidia-smi not available, GPU source disabled")
+            return
+        await super().start(bus)
+
+    async def _check_nvidia(self) -> bool:
+        """Probe for nvidia-smi binary (fixed args, safe)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi", "--query-gpu=name", "--format=csv,noheader",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            name = stdout.decode().strip()
+            if name:
+                logger.info("GPU detected: %s", name)
+                return True
+        except (OSError, asyncio.TimeoutError):
+            pass
+        return False
+
+    async def check(self) -> None:
+        if not self._available:
+            return
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                f"--query-gpu={_QUERY_FIELDS}",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except (OSError, asyncio.TimeoutError):
+            return
+
+        line = stdout.decode().strip()
+        if not line:
+            return
+
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 7:
+            return
+
+        try:
+            temp = float(parts[0])
+            vram_used = float(parts[1])
+            vram_total = float(parts[2])
+            power = float(parts[3])
+            pstate = parts[4]
+        except (ValueError, IndexError):
+            return
+
+        vram_pct = (vram_used / vram_total * 100) if vram_total > 0 else 0
+
+        # Feed trends
+        if self._trend is not None:
+            self._trend.update("gpu_temp_c", temp, slope_threshold=5.0)
+            alert = self._trend.update("gpu_vram_pct", vram_pct, slope_threshold=10.0)
+            if alert is not None:
+                await self.bus.publish(SystemEvent(
+                    type=EventType.TREND_ALERT,
+                    severity=Severity.WARNING,
+                    raw_data=f"metric=gpu_vram_pct slope={alert.slope:.1f} ema={alert.ema:.1f}",
+                    source=self.name,
+                    summary=alert.summary,
+                ))
+
+        # VRAM threshold alert
+        if vram_pct >= _VRAM_WARN_PCT and not self._last_vram_alert:
+            self._last_vram_alert = True
+            await self.bus.publish(SystemEvent(
+                type=EventType.SYSTEM_METRIC,
+                severity=Severity.WARNING,
+                raw_data=f"gpu_temp={temp} vram_used={vram_used:.0f}MB vram_total={vram_total:.0f}MB vram_pct={vram_pct:.0f} power={power}W pstate={pstate}",
+                source=self.name,
+                summary=f"GPU VRAM at {vram_pct:.0f}% ({vram_used:.0f}/{vram_total:.0f} MB)",
+            ))
+        elif vram_pct < _VRAM_WARN_PCT:
+            self._last_vram_alert = False
+
+        # Temperature alert (>85C)
+        if temp >= 85:
+            await self.bus.publish(SystemEvent(
+                type=EventType.SYSTEM_METRIC,
+                severity=Severity.CRITICAL,
+                raw_data=f"gpu_temp={temp} power={power}W pstate={pstate}",
+                source=self.name,
+                summary=f"GPU temperature critical: {temp}C (power {power}W, {pstate})",
+            ))
