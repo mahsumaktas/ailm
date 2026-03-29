@@ -134,10 +134,7 @@ class EventDedup:
         now = time.monotonic()
         self._maybe_prune(now)
 
-        # Source-level aggregation check
-        agg = self._check_source_aggregate(source, message, now)
-        if agg is not None:
-            return agg
+        # Source-level aggregation disabled in v0.3 — batch LLM handles noise
 
         state = self._states.get(fp)
         if state is None:

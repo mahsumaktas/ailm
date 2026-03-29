@@ -161,11 +161,9 @@ class JournaldSource:
                         if entry.get("SYSLOG_IDENTIFIER", "") in ("ailm",):
                             continue
 
-                        # v0.3: Priority-based only, no regex prefilter
-                        # Kernel + priority 0-4 → always capture
-                        # Priority 5-7 → skip (batch LLM handles later)
-                        is_kernel = transport == "kernel"
-                        if not is_kernel and priority > 4:
+                        # v0.3: Priority 0-3 (ERR+) only. No regex.
+                        # Kernel included but still priority-filtered.
+                        if priority > 3:
                             continue
 
                         ts = entry.get("__REALTIME_TIMESTAMP")
@@ -175,7 +173,7 @@ class JournaldSource:
                             ts = ts.replace(tzinfo=timezone.utc)
 
                         unit = entry.get("_SYSTEMD_UNIT", "")
-                        if not unit and is_kernel:
+                        if not unit and transport == "kernel":
                             unit = "kernel"
 
                         je = JournalEntry(
