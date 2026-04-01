@@ -211,7 +211,6 @@ class Application:
         async def health_job() -> None:
             self.status_tracker.prune()
             if self.llm is not None:
-                was = self.llm.available
                 await self.llm.health_check()
                 self.status_tracker.set_llm_available(self.llm.available)
 

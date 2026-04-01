@@ -197,17 +197,24 @@ class MetricsCollector(PollingSource):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
         procs.sort(key=lambda x: -x[2])
+        alerted_now: set[str] = set()
         for pid, name, rss in procs[:5]:
             gb = rss / (1024**3)
             if self._trend:
                 self._trend.update(f"proc_{name}_gb", gb, slope_threshold=1.0)
             if gb > 10:
-                await self.bus.publish(SystemEvent(
-                    type=EventType.SYSTEM_METRIC, severity=Severity.WARNING,
-                    raw_data=f"pid={pid} name={name} gb={gb:.1f}",
-                    source=self.name,
-                    summary=f"{name} (PID {pid}) using {gb:.1f} GB RAM",
-                ))
+                alerted_now.add(name)
+                if not self._alerts.get(f"proc_{name}"):
+                    self._alerts[f"proc_{name}"] = True
+                    await self.bus.publish(SystemEvent(
+                        type=EventType.SYSTEM_METRIC, severity=Severity.WARNING,
+                        raw_data=f"pid={pid} name={name} gb={gb:.1f}",
+                        source=self.name,
+                        summary=f"{name} (PID {pid}) using {gb:.1f} GB RAM",
+                    ))
+        # Clear alert when process drops below threshold
+        for key in [k for k in self._alerts if k.startswith("proc_") and k[5:] not in alerted_now]:
+            self._alerts[key] = False
 
     async def _psi(self) -> None:
         if not self._has_psi:
@@ -282,12 +289,15 @@ class MetricsCollector(PollingSource):
             ))
         elif vpct < 85:
             self._alerts["gv"] = False
-        if temp >= 85:
+        if temp >= 85 and not self._alerts.get("gt"):
+            self._alerts["gt"] = True
             await self.bus.publish(SystemEvent(
                 type=EventType.SYSTEM_METRIC, severity=Severity.CRITICAL,
                 raw_data=f"gpu_temp={temp}", source=self.name,
                 summary=f"GPU {temp}C critical",
             ))
+        elif temp < 80:
+            self._alerts["gt"] = False
 
     async def _disk_io(self) -> None:
         try:

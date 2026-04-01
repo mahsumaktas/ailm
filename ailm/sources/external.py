@@ -34,7 +34,7 @@ class ExternalCollector(PollingSource):
         self._port_state: dict[int, bool] = {}
         self._known_vulns: set[str] = set()
         self._known_dumps: set[str] = set()
-        self._known_pacnew: set[str] = set()
+        self._known_pacnew: set[str] | None = None
         self._orphan_count: int | None = None
         self._first_scan = True
 
@@ -214,7 +214,7 @@ class ExternalCollector(PollingSource):
         except (OSError, asyncio.TimeoutError):
             return
         cur = {l.strip() for l in out.decode().splitlines() if l.strip()}
-        if not self._known_pacnew:
+        if self._known_pacnew is None:
             self._known_pacnew = cur
             return
         for path in sorted(cur - self._known_pacnew):
