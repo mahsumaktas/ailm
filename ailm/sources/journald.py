@@ -6,7 +6,6 @@ Gracefully disabled when not available.
 
 import asyncio
 import logging
-import re
 import threading
 import time
 from collections import deque

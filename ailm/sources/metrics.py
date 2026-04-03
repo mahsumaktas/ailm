@@ -273,7 +273,7 @@ class MetricsCollector(PollingSource):
         if len(parts) < 4:
             return
         try:
-            temp, vu, vt, pw = float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
+            temp, vu, vt, _ = float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
         except ValueError:
             return
         vpct = (vu / vt * 100) if vt > 0 else 0

@@ -213,7 +213,7 @@ class ExternalCollector(PollingSource):
             out, _ = await asyncio.wait_for(p.communicate(), timeout=30)
         except (OSError, asyncio.TimeoutError):
             return
-        cur = {l.strip() for l in out.decode().splitlines() if l.strip()}
+        cur = {line.strip() for line in out.decode().splitlines() if line.strip()}
         if self._known_pacnew is None:
             self._known_pacnew = cur
             return
@@ -260,11 +260,11 @@ class ExternalCollector(PollingSource):
             out, _ = await asyncio.wait_for(p.communicate(), timeout=15)
         except (OSError, asyncio.TimeoutError):
             return
-        lines = [l.strip() for l in out.decode().splitlines() if l.strip()]
+        lines = [line.strip() for line in out.decode().splitlines() if line.strip()]
         count = len(lines)
         if self._orphan_count is not None and count > self._orphan_count:
             new = count - self._orphan_count
-            sample = ", ".join(l.split()[0] for l in lines[:5])
+            sample = ", ".join(line.split()[0] for line in lines[:5])
             await self.bus.publish(SystemEvent(
                 type=EventType.SYSTEM_METRIC, severity=Severity.INFO,
                 raw_data=f"orphans={count}", source="orphan",

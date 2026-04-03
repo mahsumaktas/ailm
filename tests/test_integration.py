@@ -88,7 +88,7 @@ class _FakeLLM:
     async def classify_log(self, _log_line: str) -> dict | None:
         return self._classify_result
 
-    async def generate(self, _prompt: str, _system: str | None = None) -> str | None:
+    async def generate(self, _prompt: str, system: str | None = None) -> str | None:
         if not self.available:
             return None
         return self._generate_result
@@ -307,21 +307,11 @@ class TestLLMClassificationIntegration:
                 )
             )
             await _flush_bus()
-            # Classification runs as fire-and-forget background task
-            # Give bus dispatch + background task time to complete
             await asyncio.sleep(0.5)
-            events = await app.repo.get_recent_events(limit=1)
 
             assert llm.started is True
-            # Summary is set on the in-memory event by background task,
-            # then update_summary writes it to DB if event.id is set
-            if events[0].summary is None:
-                # event.id was set after persist, background task may have
-                # set summary on the object but update_summary needs event.id
-                # In fire-and-forget mode, summary may be on the object but not in DB yet
-                # Verify the event object itself has the summary
-                pass  # acceptable: summary persistence is best-effort in async mode
-            assert app.llm_queue.pending == 0
+            # v0.3: batch analyzer replaced per-event llm_queue
+            assert app.batch_analyzer is not None
 
     async def test_unavailable_llm_queues_log_anomaly_for_later_processing(self, tmp_path: Path):
         llm = _FakeLLM(available=False)
@@ -338,11 +328,11 @@ class TestLLMClassificationIntegration:
             await _flush_bus()
             events = await app.repo.get_recent_events(limit=1)
 
+            # v0.3: no per-event queue; events persist without summary when LLM down
             assert app.status_tracker.status == SystemStatus.DEGRADED
             assert events[0].summary is None
-            assert app.llm_queue.pending == 1
 
-    async def test_health_job_drains_queued_classifications_when_llm_recovers(
+    async def test_batch_analysis_classifies_events_when_llm_recovers(
         self,
         tmp_path: Path,
     ):
@@ -359,13 +349,24 @@ class TestLLMClassificationIntegration:
             )
             await _flush_bus()
 
+            # Get the persisted event ID so the batch response can reference it
+            events_before = await app.repo.get_recent_events(limit=1)
+            event_id = events_before[0].id
+
+            # Restore LLM health, then run batch analysis
             llm._health_available = True
-            llm._generate_result = json.dumps({"summary": "Controller reset observed"})
             health_job, _seconds = scheduler.interval_jobs["health_check"]
-            await health_job()
+            await health_job()  # calls llm.health_check() → sets llm.available=True
+
+            llm._generate_result = json.dumps({
+                "events": [{"id": event_id, "summary": "Controller reset observed", "action": "investigate"}],
+                "patterns": [],
+                "overall": "disk controller issue",
+            })
+            batch_job, _seconds = scheduler.interval_jobs["batch_analysis"]
+            await batch_job()
 
             events = await app.repo.get_recent_events(limit=1)
-            assert app.llm_queue.pending == 0
             assert events[0].summary == "Controller reset observed"
             assert app.status_tracker.status == SystemStatus.DEGRADED
 
