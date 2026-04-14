@@ -115,10 +115,6 @@ class EventDedup:
         self._config = config or DedupConfig()
         self._states: dict[str, _FingerprintState] = {}
         self._rate_windows: dict[str, deque[float]] = {}
-        # Source-level aggregation state
-        self._source_counts: dict[str, deque[float]] = {}  # timestamps of events per source
-        self._source_samples: dict[str, list[str]] = {}  # sample messages for aggregate summary
-        self._source_agg_last_emit: dict[str, float] = {}
         self._last_prune: float = 0.0
 
     @property
@@ -188,47 +184,6 @@ class EventDedup:
         self._record_emission(source, now)
         return DedupDecision(
             action=DedupAction.EMIT, fingerprint=fp, suppressed_count=suppressed,
-        )
-
-    def _check_source_aggregate(
-        self, source: str, message: str, now: float,
-    ) -> DedupDecision | None:
-        """Check if this source should be aggregated (too many distinct events)."""
-        cfg = self._config
-        # Track event timestamp for this source
-        if source not in self._source_counts:
-            self._source_counts[source] = deque()
-            self._source_samples[source] = []
-        window = self._source_counts[source]
-        cutoff = now - cfg.aggregate_window_seconds
-        while window and window[0] < cutoff:
-            window.popleft()
-        window.append(now)
-
-        # Keep up to 3 sample messages
-        samples = self._source_samples[source]
-        short_msg = message[:80] if message else ""
-        if len(samples) < 3 and short_msg and short_msg not in samples:
-            samples.append(short_msg)
-
-        # Not over threshold yet — let normal dedup handle it
-        if len(window) <= cfg.aggregate_threshold:
-            return None
-
-        # Source is noisy. Check if it's time for a periodic aggregate summary.
-        last_emit = self._source_agg_last_emit.get(source, 0.0)
-        if last_emit > 0 and now - last_emit < cfg.baseline_seconds:
-            return DedupDecision(action=DedupAction.AGGREGATE, fingerprint="", aggregate_summary=None)
-
-        # Time to emit aggregate summary
-        count = len(window)
-        sample_str = "; ".join(samples) if samples else "various errors"
-        summary = f"{source}: {count} events in last {cfg.aggregate_window_seconds}s (samples: {sample_str})"
-        self._source_agg_last_emit[source] = now
-        self._source_samples[source] = []  # reset samples for next period
-        return DedupDecision(
-            action=DedupAction.AGGREGATE, fingerprint="",
-            suppressed_count=count, aggregate_summary=summary,
         )
 
     def _rate_check(self, source: str, now: float) -> bool:

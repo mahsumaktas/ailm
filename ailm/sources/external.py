@@ -54,11 +54,16 @@ class ExternalCollector(PollingSource):
         await super().stop()
 
     async def _probe(self, *args) -> bool:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             return await asyncio.wait_for(p.wait(), timeout=5) == 0
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return False
+        except OSError:
             return False
 
     async def check(self) -> None:
@@ -102,13 +107,18 @@ class ExternalCollector(PollingSource):
                 await asyncio.sleep(30)
 
     async def _tailscale(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "tailscale", "status", "--json",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=10)
             data = json.loads(out.decode())
-        except (OSError, asyncio.TimeoutError, json.JSONDecodeError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except (OSError, json.JSONDecodeError):
             return
         cur = {v.get("HostName", "?"): v.get("Online", False)
                for v in data.get("Peer", {}).values()}
@@ -134,12 +144,17 @@ class ExternalCollector(PollingSource):
     async def _services_ports(self) -> None:
         for unit, is_user in _SERVICES:
             args = ["systemctl"] + (["--user"] if is_user else []) + ["is-active", unit]
+            p = None
             try:
                 p = await asyncio.create_subprocess_exec(
                     *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
                 out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
                 active = out.decode().strip() == "active"
-            except (OSError, asyncio.TimeoutError):
+            except asyncio.TimeoutError:
+                if p is not None:
+                    p.kill()
+                active = False
+            except OSError:
                 active = False
             was = self._svc_state.get(unit)
             if was and not active:
@@ -169,12 +184,17 @@ class ExternalCollector(PollingSource):
             self._port_state[port] = up
 
     async def _coredumps(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "coredumpctl", "list", "--no-pager", "--since", "1 hour ago",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=15)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except OSError:
             return
         for line in out.decode().splitlines():
             parts = line.split()
@@ -206,12 +226,17 @@ class ExternalCollector(PollingSource):
         self._first_scan = False
 
     async def _pacnew(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "find", "/etc", "-name", "*.pacnew", "-type", "f",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=30)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except OSError:
             return
         cur = {line.strip() for line in out.decode().splitlines() if line.strip()}
         if self._known_pacnew is None:
@@ -230,12 +255,17 @@ class ExternalCollector(PollingSource):
         audit_re = re.compile(r"^(\S+) is affected by (.+)\. (\w+) risk!$")
         risk_map = {"Critical": Severity.CRITICAL, "High": Severity.CRITICAL,
                      "Medium": Severity.WARNING, "Low": Severity.INFO}
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "arch-audit",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=60)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except OSError:
             return
         cur: set[str] = set()
         for line in out.decode().splitlines():
@@ -253,12 +283,17 @@ class ExternalCollector(PollingSource):
         self._known_vulns = cur
 
     async def _orphans(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "pacman", "-Qtd",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=15)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except OSError:
             return
         lines = [line.strip() for line in out.decode().splitlines() if line.strip()]
         count = len(lines)

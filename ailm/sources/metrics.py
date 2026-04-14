@@ -103,12 +103,17 @@ class MetricsCollector(PollingSource):
         await super().start(bus)
 
     async def _probe(self, *args) -> bool:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             stdout, _ = await asyncio.wait_for(p.communicate(), timeout=5)
             return bool(stdout.decode().strip())
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return False
+        except OSError:
             return False
 
     async def check(self) -> None:
@@ -168,12 +173,16 @@ class MetricsCollector(PollingSource):
             await self.bus.publish(SystemEvent(
                 type=EventType.DISK_ALERT, severity=Severity.CRITICAL,
                 raw_data=f"pct={pct}", source=self.name, summary=f"Disk {pct:.0f}%"))
-        elif pct >= self._disk_warn and not self._alerts.get("dw"):
-            self._alerts["dw"] = True
-            await self.bus.publish(SystemEvent(
-                type=EventType.DISK_ALERT, severity=Severity.WARNING,
-                raw_data=f"pct={pct}", source=self.name, summary=f"Disk {pct:.0f}%"))
-        elif pct < self._disk_warn:
+        elif pct >= self._disk_warn:
+            # Disk dropped from critical to warning range — clear "dc" so a
+            # future critical breach can re-alert instead of staying silenced.
+            self._alerts["dc"] = False
+            if not self._alerts.get("dw"):
+                self._alerts["dw"] = True
+                await self.bus.publish(SystemEvent(
+                    type=EventType.DISK_ALERT, severity=Severity.WARNING,
+                    raw_data=f"pct={pct}", source=self.name, summary=f"Disk {pct:.0f}%"))
+        else:
             self._alerts["dc"] = self._alerts["dw"] = False
 
     async def _network(self) -> None:
@@ -321,12 +330,17 @@ class MetricsCollector(PollingSource):
 
     async def _smart(self) -> None:
         for dev in self._smart_devs:
+            p = None
             try:
                 p = await asyncio.create_subprocess_exec(
                     "smartctl", "-a", dev,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
                 out, _ = await asyncio.wait_for(p.communicate(), timeout=15)
-            except (OSError, asyncio.TimeoutError):
+            except asyncio.TimeoutError:
+                if p is not None:
+                    p.kill()
+                continue
+            except OSError:
                 continue
             vals = {}
             for k, pat in _SMART_RE.items():
@@ -335,7 +349,7 @@ class MetricsCollector(PollingSource):
                     vals[k] = int(m.group(1))
             me = vals.get("media_errors", 0)
             prev_me = self._prev_smart.get(dev, {}).get("media_errors", 0)
-            if prev_me > 0 and me > prev_me:
+            if dev in self._prev_smart and me > prev_me:
                 await self.bus.publish(SystemEvent(
                     type=EventType.SYSTEM_METRIC, severity=Severity.CRITICAL,
                     raw_data=f"dev={dev} errors={me}", source=self.name,
@@ -352,17 +366,22 @@ class MetricsCollector(PollingSource):
             self._prev_smart[dev] = vals
 
     async def _btrfs(self) -> None:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "btrfs", "device", "stats", "/",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), timeout=10)
-        except (OSError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            if p is not None:
+                p.kill()
+            return
+        except OSError:
             return
         for m in _BTRFS_RE.finditer(out.decode()):
             k, v = f"{m.group(1)}.{m.group(2)}", int(m.group(3))
             prev = self._prev_btrfs.get(k, 0)
-            if v > prev and prev > 0:
+            if k in self._prev_btrfs and v > prev:
                 sev = Severity.CRITICAL if "corruption" in k else Severity.WARNING
                 await self.bus.publish(SystemEvent(
                     type=EventType.SYSTEM_METRIC, severity=sev,
